@@ -1,8 +1,34 @@
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import {
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InvestPro</title>
+  <!-- React + ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel standalone (transpila JSX no browser) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Recharts via CDN -->
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0908; font-family: sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-presets="react">
+// ─── Extrair hooks e componentes do React global ─────────────────────────────
+const { useState, useMemo, useEffect, useCallback, useRef } = React;
+
+// ─── Extrair componentes do Recharts global ───────────────────────────────────
+const {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
-} from "recharts";
+} = Recharts;
+
 
 // ─── Responsive ───────────────────────────────────────────────────────────────
 function useIsMobile() {
@@ -336,7 +362,7 @@ function ChartTip({ active, payload, label }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // APP
 // ═══════════════════════════════════════════════════════════════════════════════
-export default function App() {
+function App() {
   const saved = lsLoad();
   const [invs,      setInvs]      = useState(saved?.investments ?? DEF_INVS);
   const [cats,      setCats]      = useState(saved?.categories  ?? DEF_CATS);
@@ -2045,3 +2071,11 @@ select option { background: #13120f; color: #d4cfc5; }
   .card-hover:hover { transform: none; box-shadow: none; }
 }
 `;
+
+
+// ─── Montar o app ─────────────────────────────────────────────────────────────
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+  </script>
+</body>
+</html>
