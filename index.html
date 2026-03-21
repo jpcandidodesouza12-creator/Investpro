@@ -4,26 +4,59 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>InvestPro</title>
-  <!-- React + ReactDOM -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <!-- Babel standalone (transpila JSX no browser) -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <!-- Recharts via CDN -->
+
+  <!-- 1. React 18 -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- 2. Recharts (depende do React estar carregado antes) -->
   <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+
+  <!-- 3. Babel (transpila JSX) - carregado por último -->
+  <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
+
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #0a0908; font-family: sans-serif; }
+    #loading {
+      position: fixed; inset: 0; background: #0a0908;
+      display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: 16px; color: #e2c97e;
+      font-family: monospace; font-size: 14px;
+    }
+    #loading .spinner {
+      width: 32px; height: 32px; border: 3px solid #2a2820;
+      border-top-color: #e2c97e; border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
+  <div id="loading">
+    <div class="spinner"></div>
+    <span>Carregando InvestPro...</span>
+  </div>
   <div id="root"></div>
 
-  <script type="text/babel" data-presets="react">
-// ─── Extrair hooks e componentes do React global ─────────────────────────────
+  <script>
+    // Garante que Recharts foi carregado antes do app rodar
+    window.addEventListener('load', function() {
+      if (typeof Recharts === 'undefined') {
+        document.getElementById('loading').innerHTML =
+          '<div style="color:#e27e9a;font-family:monospace;padding:32px;text-align:center">' +
+          '❌ Erro: Recharts não carregou.<br><br>' +
+          'Verifique sua conexão com a internet e recarregue a página.' +
+          '</div>';
+      }
+    });
+  </script>
+
+  <script type="text/babel" data-presets="react,env">
+// ─── React hooks ─────────────────────────────────────────────────────────────
 const { useState, useMemo, useEffect, useCallback, useRef } = React;
 
-// ─── Extrair componentes do Recharts global ───────────────────────────────────
+// ─── Recharts components ──────────────────────────────────────────────────────
 const {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
@@ -2073,7 +2106,8 @@ select option { background: #13120f; color: #d4cfc5; }
 `;
 
 
-// ─── Montar o app ─────────────────────────────────────────────────────────────
+// ─── Mount ───────────────────────────────────────────────────────────────────
+document.getElementById('loading').style.display = 'none';
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(React.createElement(App));
   </script>
