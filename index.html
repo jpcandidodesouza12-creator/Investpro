@@ -1,256 +1,106 @@
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>InvestPro | Gestão por Bancos</title>
-  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0a0a0a; color: #fff; font-family: 'Inter', sans-serif; overflow-x: hidden; }
-    #loading { position:fixed; inset:0; background:#0a0a0a; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:16px; color:#F5C518; z-index:9999; }
-    .spinner { width:36px; height:36px; border:3px solid #222; border-top-color:#F5C518; border-radius:50%; animation:spin .8s linear infinite; }
-    @keyframes spin { to { transform:rotate(360deg); } }
-    .card-hover:hover { transform: translateY(-3px); border-color: #444 !important; transition: 0.2s; }
-  </style>
-</head>
-<body>
-  <div id="loading"><div class="spinner"></div><span>🪙 Sincronizando Bancos...</span></div>
-  <div id="root"></div>
+<script type="text/babel" data-presets="react,env">
+  // ... (mesmas constantes iniciais: LS_KEY, CDI_ATUAL, BANK_COLORS)
 
-  <script type="text/babel" data-presets="react,env">
-    const { useState, useMemo, useEffect, useCallback, useRef } = React;
-    const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
+  function App() {
+    // 1. Correção: Estado inicial mais robusto
+    const [invs, setInvs] = useState(() => {
+      try {
+        const saved = localStorage.getItem(LS_KEY);
+        return saved ? JSON.parse(saved) : [];
+      } catch (e) { return []; }
+    });
 
-    // --- Configurações Iniciais ---
-    const LS_KEY = "investpro_v7_bancos";
-    const CDI_ATUAL = 14.51;
-    const FX_DEFAULT = { USD: 5.72, EUR: 6.21 };
+    const [modal, setModal] = useState(null);
 
-    const TYPES = [
-      { id: "cdb", label: "CDB", icon: "🏦", color: "#F5C518" },
-      { id: "lci", label: "LCI/LCA", icon: "🌾", color: "#ffffff" },
-      { id: "tesouro", label: "Tesouro", icon: "🏛️", color: "#aaaaaa" },
-      { id: "bolsa", label: "Bolsa BR", icon: "📈", color: "#F5C518" },
-      { id: "fii", label: "FII", icon: "🏢", color: "#e2a07e" },
-      { id: "crypto", label: "Crypto", icon: "₿", color: "#f7931a" },
-      { id: "stocks_us", label: "Ações EUA", icon: "🇺🇸", color: "#60a5fa", currency: "USD" },
-    ];
+    useEffect(() => {
+      localStorage.setItem(LS_KEY, JSON.stringify(invs));
+      const loader = document.getElementById('loading');
+      if(loader) loader.style.display = 'none';
+    }, [invs]);
 
-    const BANK_COLORS = {
-      "Nubank": "#8a05be",
-      "Inter": "#ff7a00",
-      "C6": "#222222",
-      "Itaú": "#ec7000",
-      "XP": "#e2c97e",
-      "BTG": "#001529",
-      "Outros": "#666"
+    // 2. Correção: Evitar NaN no cálculo total
+    const totalInv = useMemo(() => 
+      invs.reduce((a, c) => a + (Number(c.valor) || 0), 0)
+    , [invs]);
+
+    const dataBancos = useMemo(() => {
+      const map = {};
+      invs.forEach(i => {
+        const b = i.banco || "Outros";
+        map[b] = (map[b] || 0) + (Number(i.valor) || 0);
+      });
+      return Object.entries(map).map(([name, value]) => ({ 
+        name, 
+        value, 
+        color: BANK_COLORS[name] || "#666" 
+      })).sort((a,b) => b.value - a.value);
+    }, [invs]);
+
+    const saveInv = (form) => {
+      // 3. Correção: Garantir que valores vazios não quebrem o app
+      const valorNumerico = parseFloat(form.valor) || 0;
+      const pctNumerico = parseFloat(form.pct) || 0;
+
+      if (form.id === undefined || form.id === null) {
+        // Criar novo
+        setInvs([...invs, { ...form, valor: valorNumerico, pct: pctNumerico, id: Date.now() }]);
+      } else {
+        // Editar existente
+        setInvs(invs.map(i => i.id === form.id ? { ...form, valor: valorNumerico, pct: pctNumerico } : i));
+      }
+      setModal(null);
     };
 
-    // --- Helpers ---
-    const fmt = v => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
-    const fmtS = v => v >= 1e6 ? `R$${(v/1e6).toFixed(1)}M` : v >= 1e3 ? `R$${(v/1e3).toFixed(1)}k` : `R$${v.toFixed(0)}`;
+    return (
+      <div style={{ padding: "30px", maxWidth: "1200px", margin: "0 auto" }}>
+        {/* ... (Header e KPIs iguais) ... */}
 
-    function App() {
-      const [invs, setInvs] = useState(() => {
-        const saved = localStorage.getItem(LS_KEY);
-        return saved ? JSON.parse(saved) : [
-          { id: 1, nome: "CDB Liquidez", banco: "Nubank", tipo: "cdb", valor: 10000, pct: 100, data: "2024-01-01" },
-          { id: 2, nome: "LCI IPCA", banco: "Inter", tipo: "lci", valor: 5000, pct: 95, data: "2024-02-01" }
-        ];
-      });
+        {/* ... (Gráficos iguais) ... */}
 
-      const [screen, setScreen] = useState("dashboard");
-      const [modal, setModal] = useState(null);
+        {/* Modal Corrigido */}
+        {modal && (
+          <div style={styles.overlay}>
+            <div style={styles.modal}>
+              <h2 style={{ marginBottom: "20px" }}>{modal.id ? "Editar Ativo" : "Novo Ativo"}</h2>
+              
+              <label style={styles.label}>Nome do Investimento</label>
+              <input style={styles.input} defaultValue={modal.nome} id="m_nome" />
+              
+              <label style={styles.label}>Instituição (Banco)</label>
+              <select style={styles.input} defaultValue={modal.banco || "Nubank"} id="m_banco">
+                {Object.keys(BANK_COLORS).map(b => <option key={b} value={b}>{b}</option>)}
+              </select>
 
-      useEffect(() => {
-        localStorage.setItem(LS_KEY, JSON.stringify(invs));
-        document.getElementById('loading').style.display = 'none';
-      }, [invs]);
-
-      const totalInv = invs.reduce((a, c) => a + c.valor, 0);
-
-      // Agrupamento por Banco para o Gráfico
-      const dataBancos = useMemo(() => {
-        const map = {};
-        invs.forEach(i => {
-          const b = i.banco || "Outros";
-          map[b] = (map[b] || 0) + i.valor;
-        });
-        return Object.entries(map).map(([name, value]) => ({ 
-          name, 
-          value, 
-          color: BANK_COLORS[name] || "#444" 
-        })).sort((a,b) => b.value - a.value);
-      }, [invs]);
-
-      const saveInv = (form) => {
-        if (!form.id) {
-          setInvs([...invs, { ...form, id: Date.now() }]);
-        } else {
-          setInvs(invs.map(i => i.id === form.id ? form : i));
-        }
-        setModal(null);
-      };
-
-      return (
-        <div style={{ padding: "30px", maxWidth: "1200px", margin: "0 auto" }}>
-          {/* Header */}
-          <header style={{ display: "flex", justifyContent: "space-between", marginBottom: "40px" }}>
-            <div>
-              <h1 style={{ fontSize: "32px", fontWeight: "800" }}>InvestPro <span style={{color: "#F5C518"}}>Bancos</span></h1>
-              <p style={{ color: "#666" }}>Gestão estratégica de custódia</p>
-            </div>
-            <button onClick={() => setModal({})} style={styles.btnMain}>+ Novo Ativo</button>
-          </header>
-
-          {/* KPIs */}
-          <div style={styles.gridKpi}>
-            <div style={styles.kpiCard}>
-              <div style={styles.kpiLabel}>PATRIMÔNIO TOTAL</div>
-              <div style={styles.kpiValue}>{fmt(totalInv)}</div>
-            </div>
-            <div style={styles.kpiCard}>
-              <div style={styles.kpiLabel}>INSTITUIÇÕES</div>
-              <div style={styles.kpiValue}>{dataBancos.length}</div>
-            </div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", marginBottom: "40px" }}>
-            {/* Gráfico de Bancos */}
-            <div style={styles.chartCard}>
-              <h3 style={styles.chartTitle}>Alocação por Instituição</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <PieChart>
-                  <Pie data={dataBancos} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={60} outerRadius={80} paddingAngle={5}>
-                    {dataBancos.map((entry, index) => <Cell key={index} fill={entry.color} />)}
-                  </Pie>
-                  <Tooltip formatter={(v) => fmt(v)} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-
-            {/* Gráfico de Tipos */}
-            <div style={styles.chartCard}>
-              <h3 style={styles.chartTitle}>Volume por Banco (R$)</h3>
-              <ResponsiveContainer width="100%" height={250}>
-                <BarChart data={dataBancos}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#222" vertical={false} />
-                  <XAxis dataKey="name" axisLine={false} tick={{fill: '#666'}} />
-                  <YAxis tickFormatter={fmtS} axisLine={false} tick={{fill: '#666'}} />
-                  <Tooltip cursor={{fill: '#1a1a1a'}} formatter={(v) => fmt(v)} />
-                  <Bar dataKey="value" radius={[5, 5, 0, 0]}>
-                    {dataBancos.map((entry, index) => <Cell key={index} fill={entry.color} />)}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Lista de Ativos */}
-          <div style={styles.chartCard}>
-            <h3 style={styles.chartTitle}>Seus Ativos</h3>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr style={{ textAlign: "left", color: "#555", fontSize: "12px", borderBottom: "1px solid #222" }}>
-                  <th style={{ padding: "12px" }}>ATIVO</th>
-                  <th>BANCO</th>
-                  <th>VALOR</th>
-                  <th>RENTABILIDADE</th>
-                  <th>AÇÕES</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invs.map(inv => (
-                  <tr key={inv.id} style={{ borderBottom: "1px solid #1a1a1a" }}>
-                    <td style={{ padding: "15px" }}>{inv.nome}</td>
-                    <td>
-                      <span style={{ 
-                        background: (BANK_COLORS[inv.banco] || "#333") + "22", 
-                        color: BANK_COLORS[inv.banco] || "#fff",
-                        padding: "4px 10px", borderRadius: "6px", fontSize: "11px", fontWeight: "bold", border: `1px solid ${BANK_COLORS[inv.banco] || "#333"}44`
-                      }}>
-                        {inv.banco || "Outros"}
-                      </span>
-                    </td>
-                    <td style={{ fontWeight: "700" }}>{fmt(inv.valor)}</td>
-                    <td style={{ color: "#7ecfb3" }}>{inv.pct}% CDI</td>
-                    <td>
-                      <button onClick={() => setModal(inv)} style={{ background: "none", border: "none", cursor: "pointer" }}>✏️</button>
-                      <button onClick={() => setInvs(invs.filter(i => i.id !== inv.id))} style={{ background: "none", border: "none", cursor: "pointer", marginLeft: "10px" }}>🗑️</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Modal */}
-          {modal && (
-            <div style={styles.overlay}>
-              <div style={styles.modal}>
-                <h2 style={{ marginBottom: "20px" }}>Cadastrar Ativo</h2>
-                <label style={styles.label}>Nome do Investimento</label>
-                <input style={styles.input} defaultValue={modal.nome} id="m_nome" placeholder="Ex: CDB Pós-Fixado" />
-                
-                <label style={styles.label}>Instituição (Banco)</label>
-                <select style={styles.input} defaultValue={modal.banco} id="m_banco">
-                  {Object.keys(BANK_COLORS).map(b => <option key={b} value={b}>{b}</option>)}
-                </select>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                  <div>
-                    <label style={styles.label}>Valor (R$)</label>
-                    <input style={styles.input} type="number" defaultValue={modal.valor} id="m_valor" />
-                  </div>
-                  <div>
-                    <label style={styles.label}>% CDI</label>
-                    <input style={styles.input} type="number" defaultValue={modal.pct} id="m_pct" />
-                  </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                <div>
+                  <label style={styles.label}>Valor (R$)</label>
+                  <input style={styles.input} type="number" defaultValue={modal.valor} id="m_valor" />
                 </div>
-
-                <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
-                  <button onClick={() => setModal(null)} style={styles.btnSec}>Cancelar</button>
-                  <button onClick={() => {
-                    saveInv({
-                      id: modal.id,
-                      nome: document.getElementById('m_nome').value,
-                      banco: document.getElementById('m_banco').value,
-                      valor: parseFloat(document.getElementById('m_valor').value),
-                      pct: parseFloat(document.getElementById('m_pct').value),
-                      tipo: "cdb",
-                      data: "2024-01-01"
-                    });
-                  }} style={styles.btnMain}>Salvar Ativo</button>
+                <div>
+                  <label style={styles.label}>% CDI</label>
+                  <input style={styles.input} type="number" defaultValue={modal.pct} id="m_pct" />
                 </div>
               </div>
+
+              <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
+                <button onClick={() => setModal(null)} style={styles.btnSec}>Cancelar</button>
+                <button onClick={() => {
+                  saveInv({
+                    id: modal.id, // Aqui passamos o ID original se for edição
+                    nome: document.getElementById('m_nome').value,
+                    banco: document.getElementById('m_banco').value,
+                    valor: document.getElementById('m_valor').value,
+                    pct: document.getElementById('m_pct').value,
+                    tipo: "cdb",
+                    data: "2024-01-01"
+                  });
+                }} style={styles.btnMain}>Salvar</button>
+              </div>
             </div>
-          )}
-        </div>
-      );
-    }
-
-    const styles = {
-      gridKpi: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "15px", marginBottom: "30px" },
-      kpiCard: { background: "#111", padding: "20px", borderRadius: "15px", border: "1px solid #222" },
-      kpiLabel: { fontSize: "10px", color: "#555", letterSpacing: "1px", marginBottom: "5px" },
-      kpiValue: { fontSize: "22px", fontWeight: "800", color: "#F5C518" },
-      chartCard: { background: "#111", padding: "25px", borderRadius: "15px", border: "1px solid #222" },
-      chartTitle: { fontSize: "12px", color: "#555", textTransform: "uppercase", marginBottom: "20px", letterSpacing: "1px" },
-      btnMain: { background: "#F5C518", border: "none", padding: "10px 20px", borderRadius: "8px", fontWeight: "bold", cursor: "pointer" },
-      btnSec: { background: "#222", color: "#fff", border: "none", padding: "10px 20px", borderRadius: "8px", cursor: "pointer" },
-      overlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.9)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 },
-      modal: { background: "#111", padding: "30px", borderRadius: "20px", width: "400px", border: "1px solid #333" },
-      label: { display: "block", fontSize: "11px", color: "#555", marginBottom: "5px", marginTop: "15px" },
-      input: { width: "100%", background: "#000", border: "1px solid #333", padding: "10px", borderRadius: "8px", color: "#fff" }
-    };
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
-  </script>
-</body>
-</html>
+          </div>
+        )}
+      </div>
+    );
+  }
+  // ... (Estilos e Render)
+</script>
