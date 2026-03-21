@@ -4,20 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>InvestPro</title>
-
-  <!-- 1. React 18 -->
   <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
-
-  <!-- 2. Prop-Types (dependência do Recharts) -->
   <script src="https://cdn.jsdelivr.net/npm/prop-types@15/prop-types.min.js"></script>
-
-  <!-- 3. Recharts via jsDelivr -->
   <script src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
-
-  <!-- 4. Babel standalone -->
   <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
-
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { background: #0a0908; font-family: sans-serif; }
@@ -33,15 +24,6 @@
       animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    #error-box {
-      display: none; position: fixed; inset: 0; background: #0a0908;
-      align-items: center; justify-content: center; z-index: 9999;
-    }
-    #error-box div {
-      background: #1a0808; border: 1px solid #e27e9a44; border-radius: 12px;
-      padding: 32px; max-width: 400px; text-align: center;
-      color: #e27e9a; font-family: monospace; font-size: 13px; line-height: 1.8;
-    }
   </style>
 </head>
 <body>
@@ -49,55 +31,11 @@
     <div class="spinner"></div>
     <span>◈ Carregando InvestPro...</span>
   </div>
-
-  <div id="error-box">
-    <div>
-      <div style="font-size:32px;margin-bottom:12px">⚠️</div>
-      <strong>Erro ao carregar bibliotecas</strong><br><br>
-      <span id="error-msg">Biblioteca não carregou.</span><br><br>
-      <span style="color:#6a6458">Verifique sua conexão com a internet e recarregue a página (F5).</span>
-    </div>
-  </div>
-
   <div id="root"></div>
 
-  <script>
-    function showError(msg) {
-      document.getElementById('loading').style.display = 'none';
-      var box = document.getElementById('error-box');
-      box.style.display = 'flex';
-      document.getElementById('error-msg').textContent = msg;
-    }
-
-    // Aguarda todos os scripts e verifica cada dependência
-    window.addEventListener('DOMContentLoaded', function() {
-      setTimeout(function() {
-        if (typeof React === 'undefined') {
-          showError('React não carregou. Verifique sua internet.'); return;
-        }
-        if (typeof ReactDOM === 'undefined') {
-          showError('ReactDOM não carregou. Verifique sua internet.'); return;
-        }
-        if (typeof Recharts === 'undefined') {
-          showError('Recharts não carregou. Tente limpar o cache (Ctrl+Shift+R).'); return;
-        }
-        if (typeof Babel === 'undefined') {
-          showError('Babel não carregou. Verifique sua internet.'); return;
-        }
-        // Tudo OK — o Babel vai transpilar e montar o app
-      }, 500);
-    });
-  </script>
-
   <script type="text/babel" data-presets="react,env">
-// ─── React hooks ─────────────────────────────────────────────────────────────
 const { useState, useMemo, useEffect, useCallback, useRef } = React;
-
-// ─── Recharts components ──────────────────────────────────────────────────────
-const {
-  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell
-} = Recharts;
+const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
 
 
 // ─── Responsive ───────────────────────────────────────────────────────────────
@@ -330,7 +268,9 @@ const DEF_QUOTES = {
   updatedAt: null,
 };
 
-async function fetchAllQuotes(watchlist) {
+async function fetchAllQuotes(watchlist, apiKey) {
+  if (!apiKey || !apiKey.trim()) throw new Error("Chave de API não configurada. Vá em Configurações → Chave da API Anthropic.");
+
   const currencies = (watchlist.currencies || []).join(", ");
   const br         = (watchlist.br         || []).join(", ");
   const us         = (watchlist.us         || []).join(", ");
@@ -342,7 +282,12 @@ async function fetchAllQuotes(watchlist) {
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey.trim(),
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 2048,
@@ -444,6 +389,7 @@ function App() {
   const [quotes,    setQuotes]    = useState(saved?.quotes        ?? DEF_QUOTES);
   const [qLoading,  setQLoading]  = useState(false);
   const [snaps,     setSnaps]     = useState(() => lsLoadSnaps());
+  const [apiKey,    setApiKey_]   = useState(() => { try { return localStorage.getItem("investpro_apikey") || ""; } catch(_) { return ""; } });
   const [screen,    setScreen]    = useState("dashboard");
   const [sideOpen,  setSideOpen]  = useState(false);
   const [modal,     setModal]     = useState(null);
@@ -570,10 +516,16 @@ function App() {
     toast_(`✓ Versão de ${new Date(snap.ts).toLocaleString("pt-BR")} restaurada`);
   }
 
+  function saveApiKey(key) {
+    try { localStorage.setItem("investpro_apikey", key); } catch(_) {}
+    setApiKey_(key);
+    toast_("✓ Chave de API salva");
+  }
+
   async function fetchQuotes(watchlist) {
     setQLoading(true);
     try {
-      const data = await fetchAllQuotes(watchlist);
+      const data = await fetchAllQuotes(watchlist, apiKey);
       const now  = new Date().toLocaleString("pt-BR");
       const newQ = { ...quotes, watchlist, data, updatedAt: now, error: null };
       setQuotes(newQ);
@@ -617,7 +569,7 @@ function App() {
     toast_(`✓ ${ni.length} investimentos importados`);
   }
 
-  const sp = { invs, cats, settings, projs, cons, totalInv, deps, fx, isMobile, quotes, snaps };
+  const sp = { invs, cats, settings, projs, cons, totalInv, deps, fx, isMobile, quotes, snaps, apiKey };
 
   return (
     <div style={S.app}>
@@ -654,7 +606,7 @@ function App() {
         {screen === "projection"  && <ScreenProjection  {...sp} />}
         {screen === "quotes"      && <ScreenCotacoes    {...sp} onFetch={fetchQuotes} onUpdateWatchlist={updateWatchlist} qLoading={qLoading} />}
         {screen === "categories"  && <ScreenCategories  {...sp} onAdd={() => setModal({t:"cat",d:{}})} onEdit={cat => setModal({t:"cat",d:cat})} onDel={delCat} />}
-        {screen === "settings"    && <ScreenSettings    {...sp} onSave={saveSettings} onRestore={restoreSnap} />}
+        {screen === "settings"    && <ScreenSettings    {...sp} onSave={saveSettings} onRestore={restoreSnap} onSaveApiKey={saveApiKey} />}
       </main>
 
       {isMobile && (
@@ -1398,12 +1350,14 @@ function ScreenCategories({ invs, cats, isMobile, onAdd, onEdit, onDel }) {
   );
 }
 
-function ScreenSettings({ invs, settings, isMobile, onSave, snaps, onRestore }) {
-  const [form, setForm] = useState({
+function ScreenSettings({ invs, settings, isMobile, onSave, snaps, onRestore, apiKey, onSaveApiKey }) {
+  const [form,      setForm]      = useState({
     cdiRate: settings.cdiRate,
     fx:   { ...FX_DEFAULT, ...settings.fx },
     meta: { ativa:false, valor:100000, prazo:24, ...settings.meta },
   });
+  const [keyInput,  setKeyInput]  = useState(apiKey || "");
+  const [showKey,   setShowKey]   = useState(false);
 
   useEffect(() => {
     setForm(f => ({ ...f, cdiRate: settings.cdiRate }));
@@ -1414,6 +1368,53 @@ function ScreenSettings({ invs, settings, isMobile, onSave, snaps, onRestore }) 
       <PageHeader title="Configurações" subtitle="Personalize os parâmetros" />
       <div style={{ maxWidth:520 }}>
 
+        {/* ── Chave de API ── */}
+        <div style={{ ...P.setCard, borderColor: apiKey ? "#7ecfb344" : "#e2c97e44" }}>
+          <div style={P.setTitle}>🔑 Chave de API Anthropic</div>
+          <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"10px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginBottom:14, lineHeight:1.7 }}>
+            Necessária para buscar cotações. Obtenha gratuitamente em{" "}
+            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer"
+              style={{ color:"#e2c97e", textDecoration:"underline" }}>
+              console.anthropic.com/settings/keys
+            </a>
+          </div>
+          {apiKey ? (
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, background:"#081f12", border:"1px solid #7ecfb344", borderRadius:8, padding:"10px 14px" }}>
+              <span style={{ fontSize:16 }}>✓</span>
+              <span style={{ color:"#7ecfb3", fontSize:12, fontFamily:"IBM Plex Mono,monospace", flex:1 }}>Chave configurada (sk-ant-...{apiKey.slice(-6)})</span>
+              <button style={{ ...P.iBtn, fontSize:11 }} onClick={() => { setKeyInput(""); onSaveApiKey(""); }}>Remover</button>
+            </div>
+          ) : (
+            <div style={{ background:"#1a0e08", border:"1px solid #e2c97e44", borderRadius:8, padding:"10px 14px", marginBottom:10, fontSize:11, color:"#e2c97e", fontFamily:"IBM Plex Mono,monospace" }}>
+              ⚠️ Sem chave configurada — cotações não funcionarão.
+            </div>
+          )}
+          <label style={P.label}>Cole sua chave aqui</label>
+          <div style={{ display:"flex", gap:8 }}>
+            <div style={{ flex:1, position:"relative" }}>
+              <input
+                style={{ ...P.input, paddingRight:40, fontFamily:"IBM Plex Mono,monospace", fontSize:12 }}
+                type={showKey ? "text" : "password"}
+                value={keyInput}
+                onChange={e => setKeyInput(e.target.value)}
+                placeholder="sk-ant-api03-..."
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button
+                onClick={() => setShowKey(s => !s)}
+                style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", color:"#6a6458", fontSize:14 }}>
+                {showKey ? "🙈" : "👁️"}
+              </button>
+            </div>
+            <Btn onClick={() => onSaveApiKey(keyInput)}>Salvar</Btn>
+          </div>
+          <div style={{ color:"#4a4438", fontSize:10, fontFamily:"IBM Plex Mono,monospace", marginTop:6 }}>
+            🔒 A chave é salva apenas neste navegador (localStorage). Nunca sai do seu dispositivo.
+          </div>
+        </div>
+
+        {/* ── Taxa CDI ── */}
         <div style={P.setCard}>
           <div style={P.setTitle}>Taxa CDI</div>
           <div style={{ display:"flex", gap:16, background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:10, padding:16 }}>
@@ -2143,9 +2144,7 @@ select option { background: #13120f; color: #d4cfc5; }
 `;
 
 
-// ─── Mount ───────────────────────────────────────────────────────────────────
 document.getElementById('loading').style.display = 'none';
-document.getElementById('error-box').style.display = 'none';
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(React.createElement(App));
   </script>
