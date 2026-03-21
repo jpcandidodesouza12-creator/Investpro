@@ -1,106 +1,2407 @@
-<script type="text/babel" data-presets="react,env">
-  // ... (mesmas constantes iniciais: LS_KEY, CDI_ATUAL, BANK_COLORS)
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InvestPro</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prop-types@15/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a0a; color: #fff; font-family: sans-serif; }
+    #loading { position:fixed; inset:0; background:#0a0a0a; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:16px; color:#F5C518; font-family:monospace; font-size:14px; z-index:9999; }
+    .spinner { width:36px; height:36px; border:3px solid #222; border-top-color:#F5C518; border-radius:50%; animation:spin .8s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div id="loading"><div class="spinner"></div><span>🪙 Carregando InvestPro...</span></div>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react,env">
+const { useState, useMemo, useEffect, useCallback, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
 
-  function App() {
-    // 1. Correção: Estado inicial mais robusto
-    const [invs, setInvs] = useState(() => {
+
+// ─── Responsive ───────────────────────────────────────────────────────────────
+function useIsMobile() {
+  const [v, set] = useState(false);
+  useEffect(() => {
+    const fn = () => set(window.innerWidth < 768);
+    fn();
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, []);
+  return v;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const LS_KEY    = "investpro_v6";
+const CDI_ATUAL = 14.51;
+const CDI_REF   = "20/03/2026";
+const FX_DEFAULT = { USD: 5.72, EUR: 6.21 };
+
+const DEFAULT_SETTINGS = {
+  cdiRate: CDI_ATUAL,
+  fx: FX_DEFAULT,
+  meta: { ativa: false, valor: 100000, prazo: 24 },
+};
+
+const TYPES = [
+  { id: "cdb",      label: "CDB",       icon: "🏦", color: "#F5C518", ir: true,  intl: false },
+  { id: "lci",      label: "LCI/LCA",   icon: "🌾", color: "#ffffff", ir: false, intl: false },
+  { id: "tesouro",  label: "Tesouro",   icon: "🏛️", color: "#aaaaaa", ir: true,  intl: false },
+  { id: "bolsa",    label: "Bolsa BR",  icon: "📈", color: "#F5C518", ir: false, intl: false },
+  { id: "fii",      label: "FII",       icon: "🏢", color: "#e2a07e", ir: false, intl: false },
+  { id: "crypto",   label: "Crypto",    icon: "₿",  color: "#f7931a", ir: false, intl: false },
+  { id: "stocks_us",label: "Ações EUA", icon: "🇺🇸", color: "#60a5fa", ir: false, intl: true, currency: "USD" },
+  { id: "etf_us",   label: "ETF EUA",   icon: "📊", color: "#34d399", ir: false, intl: true, currency: "USD" },
+  { id: "etf_eu",   label: "ETF EUR",   icon: "🇪🇺", color: "#a78bfa", ir: false, intl: true, currency: "EUR" },
+  { id: "outro",    label: "Outro",     icon: "📦", color: "#9a9a9a", ir: false, intl: false },
+];
+
+const NAV = [
+  { id: "dashboard",   label: "Dashboard",    icon: "◈" },
+  { id: "investments", label: "Investimentos", icon: "◎" },
+  { id: "renda",       label: "Minha Renda",  icon: "💵" },
+  { id: "history",     label: "Aportes",       icon: "◫" },
+  { id: "comparator",  label: "Comparador",    icon: "⊗" },
+  { id: "projection",  label: "Projeção",      icon: "◬" },
+  { id: "quotes",      label: "Cotações",      icon: "◭" },
+  { id: "categories",  label: "Categorias",    icon: "⊞" },
+  { id: "settings",    label: "Config.",       icon: "⚙" },
+];
+
+// ─── Minha Renda — constants ──────────────────────────────────────────────────
+const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+
+const DEF_RENDA_CATS = [
+  { id:1,  nome:"Consórcio Casa",  icone:"🏠" },
+  { id:2,  nome:"Consórcio 80k",   icone:"🏗️" },
+  { id:3,  nome:"Consórcio 20k",   icone:"🏗️" },
+  { id:4,  nome:"Aluguel",         icone:"🏠" },
+  { id:5,  nome:"Internet",        icone:"🌐" },
+  { id:6,  nome:"Energia",         icone:"⚡" },
+  { id:7,  nome:"Água",            icone:"💧" },
+  { id:8,  nome:"Claro",           icone:"📱" },
+  { id:9,  nome:"Plano odonto",    icone:"🦷" },
+  { id:10, nome:"Plano petlove",   icone:"🐾" },
+  { id:11, nome:"MEI",             icone:"💼" },
+  { id:12, nome:"Inter",           icone:"💳" },
+  { id:13, nome:"C6",              icone:"💳" },
+  { id:14, nome:"Mercado pago",    icone:"💳" },
+  { id:15, nome:"Nubank",          icone:"💳" },
+  { id:16, nome:"Itaú",            icone:"💳" },
+  { id:17, nome:"Supermercado",    icone:"🛒" },
+  { id:18, nome:"Outros",          icone:"📦" },
+];
+
+// Default monthly gastos (previstos) based on the spreadsheet
+const DEF_RENDA_GASTOS_PREV = {
+  1:0, 2:496, 3:201, 4:1000, 5:100, 6:240, 7:120, 8:40,
+  9:35, 10:34, 11:86, 12:800, 13:3700, 14:90, 15:0, 16:0, 17:0, 18:0
+};
+
+function defRendaMes() {
+  return {
+    receitas: { salario: 9900, freelance: 0, outros: 200 },
+    gastos: DEF_RENDA_CATS.map(c => ({ catId:c.id, previsto: DEF_RENDA_GASTOS_PREV[c.id]||0, real:0 })),
+  };
+}
+
+function defRenda() {
+  const r = {};
+  MESES.forEach((_, i) => { r[i] = defRendaMes(); });
+  return r;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function getType(id) { return TYPES.find(t => t.id === id) || TYPES[TYPES.length - 1]; }
+
+function irAliquota(dias) {
+  if (dias <= 180) return 0.225;
+  if (dias <= 360) return 0.200;
+  if (dias <= 720) return 0.175;
+  return 0.15;
+}
+function irLabel(dias) {
+  if (dias <= 180) return "22,5%";
+  if (dias <= 360) return "20,0%";
+  if (dias <= 720) return "17,5%";
+  return "15,0%";
+}
+
+function getIRAlert(inv) {
+  const dias = Math.round((Date.now() - new Date(inv.data + "T12:00:00").getTime()) / 86400000);
+  const bands = [[160, 180, "22,5%", "20,0%"], [340, 360, "20,0%", "17,5%"], [700, 720, "17,5%", "15,0%"]];
+  for (const [s, e, from, to] of bands) {
+    if (dias >= s && dias < e) {
+      return { faixa: from, proxima: to, diasRestantes: e - dias, urgente: dias >= s + 15 };
+    }
+  }
+  return null;
+}
+
+function getVencAlert(inv) {
+  if (!inv.vencimento) return null;
+  const dias = Math.round((new Date(inv.vencimento + "T12:00:00").getTime() - Date.now()) / 86400000);
+  if (dias < 0)   return { label: "Vencido",   dias: Math.abs(dias), cor: "#e27e7e", urgente: true  };
+  if (dias <= 30) return { label: `${dias}d`,  dias, cor: "#e27e9a", urgente: true  };
+  if (dias <= 90) return { label: `${dias}d`,  dias, cor: "#e2c97e", urgente: false };
+  return null;
+}
+
+function addMonths(date, n) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + n);
+  return d;
+}
+
+function calcMonths(inv, cdiRate, fx) {
+  const t      = getType(inv.tipo);
+  const annual = t.intl ? (inv.pct / 100) : ((cdiRate * (inv.pct || 100)) / 10000);
+  const mo     = Math.pow(1 + annual, 1 / 12) - 1;
+  const start  = new Date(inv.data + "T12:00:00");
+  const today  = new Date();
+  const past   = Math.max(0,
+    (today.getFullYear() - start.getFullYear()) * 12 + today.getMonth() - start.getMonth()
+  );
+  const fxRate  = t.currency ? (fx[t.currency] || 1) : 1;
+  const valBRL  = inv.valor * fxRate;
+
+  return Array.from({ length: 24 }, (_, i) => {
+    const fd       = addMonths(today, i + 1);
+    const dtot     = Math.round((fd - start) / 86400000);
+    const aliq     = t.ir ? irAliquota(dtot) : 0;
+    const saldo    = valBRL * Math.pow(1 + mo, past + i + 1);
+    const rb       = saldo - valBRL;
+    const ir       = rb * aliq;
+    const rl       = rb - ir;
+    return {
+      mes:          fd.toLocaleDateString("pt-BR", { month: "short", year: "numeric" }),
+      saldo,        rendimento: rb,
+      ir,           aliquotaLabel: irLabel(dtot),
+      saldoLiquido: valBRL + rl,
+      rendLiquido:  rl,
+    };
+  });
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
+const fmt  = v => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+const fmtP = v => v.toFixed(2).replace(".", ",") + "%";
+const fmtS = v => v >= 1e6 ? `R$${(v/1e6).toFixed(1)}M` : v >= 1e3 ? `R$${(v/1e3).toFixed(1)}k` : `R$${v.toFixed(0)}`;
+const fmtD = s => s ? new Date(s + "T12:00:00").toLocaleDateString("pt-BR") : "—";
+const fmtFX = (v, cur) => cur === "USD" ? `US$ ${v.toFixed(2)}` : `€ ${v.toFixed(2)}`;
+
+// ─── Storage ──────────────────────────────────────────────────────────────────
+const LS_SNAPS = "investpro_snaps_v1";
+const MAX_SNAPS = 10;
+
+function lsLoad() {
+  try { const r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : null; }
+  catch (_) { return null; }
+}
+
+function lsSave(d) {
+  try {
+    // Before overwriting, snapshot the current state
+    const current = localStorage.getItem(LS_KEY);
+    if (current) {
       try {
-        const saved = localStorage.getItem(LS_KEY);
-        return saved ? JSON.parse(saved) : [];
-      } catch (e) { return []; }
+        const snaps = JSON.parse(localStorage.getItem(LS_SNAPS) || "[]");
+        const cur   = JSON.parse(current);
+        const label = cur.investments
+          ? `${cur.investments.length} ativo${cur.investments.length!==1?"s":""}`
+          : "snapshot";
+        snaps.unshift({
+          ts:      Date.now(),
+          label,
+          data:    current,
+        });
+        localStorage.setItem(LS_SNAPS, JSON.stringify(snaps.slice(0, MAX_SNAPS)));
+      } catch (_) {}
+    }
+    localStorage.setItem(LS_KEY, JSON.stringify(d));
+  } catch (_) {}
+}
+
+function lsLoadSnaps() {
+  try { return JSON.parse(localStorage.getItem(LS_SNAPS) || "[]"); }
+  catch (_) { return []; }
+}
+
+function lsRestoreSnap(snapData) {
+  try {
+    // Snapshot current state before restoring
+    const current = localStorage.getItem(LS_KEY);
+    if (current) {
+      const snaps = lsLoadSnaps();
+      const cur   = JSON.parse(current);
+      snaps.unshift({ ts: Date.now(), label: `(antes do restore) ${cur.investments?.length||0} ativos`, data: current });
+      localStorage.setItem(LS_SNAPS, JSON.stringify(snaps.slice(0, MAX_SNAPS)));
+    }
+    localStorage.setItem(LS_KEY, snapData);
+    return JSON.parse(snapData);
+  } catch (_) { return null; }
+}
+
+// ─── Export / Import ──────────────────────────────────────────────────────────
+function doExportJSON(investments, categories, settings, deposits) {
+  const b = new Blob([JSON.stringify({ investments, categories, settings, deposits }, null, 2)], { type: "application/json" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(b), download: `investpro_${Date.now()}.json` });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function doExportCSV(investments) {
+  const rows = ["id,nome,tipo,valor,pct,data,vencimento,categoriaId",
+    ...investments.map(i => `${i.id},"${i.nome}",${i.tipo},${i.valor},${i.pct},${i.data},${i.vencimento||""},${i.categoriaId||""}`)];
+  const b = new Blob([rows.join("\n")], { type: "text/csv" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(b), download: `investpro_${Date.now()}.csv` });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function parseImport(text, isCSV) {
+  if (isCSV) {
+    const rows = text.trim().split("\n").slice(1);
+    const investments = rows.map((l, i) => {
+      const c = l.split(",");
+      return { id: parseInt(c[0]) || i+1, nome: (c[1]||"").replace(/"/g,""), tipo: c[2]||"cdb", valor: parseFloat(c[3])||0, pct: parseFloat(c[4])||100, data: c[5]||"2024-01-01", vencimento: c[6]||null, categoriaId: c[7] ? parseInt(c[7]) : null };
+    });
+    return { investments };
+  }
+  const d = JSON.parse(text);
+  if (!Array.isArray(d.investments)) throw new Error("Invalid");
+  return d;
+}
+
+// ─── Defaults ─────────────────────────────────────────────────────────────────
+const DEF_CATS = [
+  { id:1, nome:"Renda Fixa",     cor:"#e2c97e" },
+  { id:2, nome:"Renda Variável", cor:"#b77ee2" },
+  { id:3, nome:"Reserva",        cor:"#7ecfb3" },
+];
+const DEF_INVS = [
+  { id:1, nome:"CDB Nubank", tipo:"cdb", valor:10000, pct:100, data:"2024-09-01", vencimento:"2026-09-01", categoriaId:1 },
+  { id:2, nome:"LCI Inter",  tipo:"lci", valor:5000,  pct:95,  data:"2024-06-15", vencimento:null,        categoriaId:3 },
+];
+
+// ─── Quotes ───────────────────────────────────────────────────────────────────
+const DEF_WATCHLIST = {
+  currencies: ["USD", "EUR", "GBP", "ARS", "JPY"],
+  br:         ["PETR4", "VALE3", "ITUB4", "BBDC4", "MGLU3"],
+  us:         ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"],
+  crypto:     ["BTC", "ETH", "SOL", "BNB"],
+};
+const DEF_QUOTES = {
+  watchlist: DEF_WATCHLIST,
+  data: { currencies:{}, br:{}, us:{}, crypto:{} },
+  updatedAt: null,
+};
+
+async function fetchAllQuotes(watchlist, apiKey) {
+  if (!apiKey || !apiKey.trim()) throw new Error("Chave de API não configurada. Vá em Configurações → Chave da API Anthropic.");
+
+  const currencies = (watchlist.currencies || []).join(", ");
+  const br         = (watchlist.br         || []).join(", ");
+  const us         = (watchlist.us         || []).join(", ");
+  const crypto     = (watchlist.crypto     || []).join(", ");
+
+  const today = new Date().toLocaleDateString("pt-BR");
+
+  let rawText = "";
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey.trim(),
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 2048,
+        system: "Você é um assistente financeiro. Responda APENAS com JSON válido entre <<<JSON e JSON>>>.",
+        messages: [{
+          role: "user",
+          content: `Data: ${today}. Forneça cotações recentes e a taxa CDI atual do Brasil (% ao ano, ex: 14.75). Responda SOMENTE com este bloco:\n<<<JSON\n{"cdi":14.75,"currencies":{"USD":{"price":5.72,"change":0.03,"changePct":0.52}},"br":{"PETR4":{"price":38.5,"change":-0.2,"changePct":-0.51}},"us":{"AAPL":{"price":175.3,"change":1.2,"changePct":0.69}},"crypto":{"BTC":{"price":85000,"change":1200,"changePct":1.43}}}\nJSON>>>\nAtivos: moedas BRL (${currencies}), ações BR (${br}), ações EUA USD (${us}), crypto USD (${crypto}).`,
+        }],
+      }),
     });
 
-    const [modal, setModal] = useState(null);
+    rawText = await res.text();
 
-    useEffect(() => {
-      localStorage.setItem(LS_KEY, JSON.stringify(invs));
-      const loader = document.getElementById('loading');
-      if(loader) loader.style.display = 'none';
-    }, [invs]);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} — ${rawText.substring(0, 300)}`);
+    }
 
-    // 2. Correção: Evitar NaN no cálculo total
-    const totalInv = useMemo(() => 
-      invs.reduce((a, c) => a + (Number(c.valor) || 0), 0)
-    , [invs]);
+    const resp = JSON.parse(rawText);
+    const allText = (resp.content || [])
+      .filter(b => b.type === "text")
+      .map(b => b.text || "")
+      .join("\n");
 
-    const dataBancos = useMemo(() => {
-      const map = {};
-      invs.forEach(i => {
-        const b = i.banco || "Outros";
-        map[b] = (map[b] || 0) + (Number(i.valor) || 0);
-      });
-      return Object.entries(map).map(([name, value]) => ({ 
-        name, 
-        value, 
-        color: BANK_COLORS[name] || "#666" 
-      })).sort((a,b) => b.value - a.value);
-    }, [invs]);
+    if (!allText.trim()) {
+      throw new Error(`stop_reason: ${resp.stop_reason} | blocos: ${(resp.content||[]).map(b=>b.type).join(",")} | raw: ${rawText.substring(0,200)}`);
+    }
 
-    const saveInv = (form) => {
-      // 3. Correção: Garantir que valores vazios não quebrem o app
-      const valorNumerico = parseFloat(form.valor) || 0;
-      const pctNumerico = parseFloat(form.pct) || 0;
+    // Strategy 1: <<<JSON ... JSON>>>
+    const ds = allText.indexOf("<<<JSON");
+    const de = allText.indexOf("JSON>>>");
+    if (ds !== -1 && de !== -1) {
+      try {
+        const parsed = JSON.parse(allText.slice(ds + 7, de).trim());
+        if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
+      } catch (e) { /* try next */ }
+    }
 
-      if (form.id === undefined || form.id === null) {
-        // Criar novo
-        setInvs([...invs, { ...form, valor: valorNumerico, pct: pctNumerico, id: Date.now() }]);
-      } else {
-        // Editar existente
-        setInvs(invs.map(i => i.id === form.id ? { ...form, valor: valorNumerico, pct: pctNumerico } : i));
+    // Strategy 2: outermost { ... }
+    const s = allText.indexOf("{");
+    const e = allText.lastIndexOf("}");
+    if (s !== -1 && e > s) {
+      try {
+        const parsed = JSON.parse(allText.slice(s, e + 1));
+        if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
+      } catch (e) { /* try next */ }
+    }
+
+    // Strategy 3: markdown
+    const md = allText.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (md) {
+      try {
+        const parsed = JSON.parse(md[1].trim());
+        if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
+      } catch (e) { /* fail below */ }
+    }
+
+    throw new Error(`JSON não encontrado. Resposta: "${allText.substring(0, 200).replace(/\n/g, " ")}"`);
+
+  } catch (err) {
+    if (err.message.includes("JSON não encontrado") || err.message.includes("HTTP") || err.message.includes("stop_reason")) {
+      throw err;
+    }
+    // Network/fetch error
+    throw new Error(`Erro de rede: ${err.message} | raw: ${rawText.substring(0, 150)}`);
+  }
+}
+
+// ─── Tooltip ──────────────────────────────────────────────────────────────────
+const TIP_S = { background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, padding:"10px 14px", fontFamily:"IBM Plex Mono,monospace", fontSize:11 };
+const TIP_H = { color:"#c9bfaa", fontWeight:600, marginBottom:6, borderBottom:"1px solid #1e1c16", paddingBottom:4 };
+
+function ChartTip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  return (
+    <div style={TIP_S}>
+      <div style={TIP_H}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ display:"flex", justifyContent:"space-between", gap:12, marginBottom:2 }}>
+          <span style={{ color:"#6a6458" }}>{p.dataKey || p.name}</span>
+          <span style={{ color: p.stroke || p.fill, fontWeight:600 }}>{fmt(p.value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APP
+// ═══════════════════════════════════════════════════════════════════════════════
+function App() {
+  const saved = lsLoad();
+  const [invs,      setInvs]      = useState(saved?.investments ?? DEF_INVS);
+  const [cats,      setCats]      = useState(saved?.categories  ?? DEF_CATS);
+  const [settings,  setSettings]  = useState(saved?.settings    ?? DEFAULT_SETTINGS);
+  const [deps,      setDeps]      = useState(saved?.deposits     ?? []);
+  const [nii,       setNii]       = useState(saved?.nii          ?? 3);
+  const [nci,       setNci]       = useState(saved?.nci          ?? 4);
+  const [ndi,       setNdi]       = useState(saved?.ndi          ?? 1);
+  const [quotes,    setQuotes]    = useState(saved?.quotes        ?? DEF_QUOTES);
+  const [renda,     setRenda]     = useState(saved?.renda          ?? defRenda());
+  const [qLoading,  setQLoading]  = useState(false);
+  const [snaps,     setSnaps]     = useState(() => lsLoadSnaps());
+  const [apiKey,    setApiKey_]   = useState(() => { try { return localStorage.getItem("investpro_apikey") || ""; } catch(_) { return ""; } });
+  const [screen,    setScreen]    = useState("dashboard");
+  const [sideOpen,  setSideOpen]  = useState(false);
+  const [modal,     setModal]     = useState(null);
+  const [toast,     setToast]     = useState(null);
+  const toastRef = useRef(null);
+  const isMobile = useIsMobile();
+  const fx = settings.fx || FX_DEFAULT;
+
+  const save = useCallback((i, c, s, d, ni, nc, nd, q, r) => {
+    lsSave({ investments:i, categories:c, settings:s, deposits:d, nii:ni, nci:nc, ndi:nd, quotes:q, renda:r });
+    setSnaps(lsLoadSnaps());
+  }, []);
+
+  const toast_ = useCallback((msg, ok=true) => {
+    setToast({ msg, ok });
+    clearTimeout(toastRef.current);
+    toastRef.current = setTimeout(() => setToast(null), 2800);
+  }, []);
+
+  const projs = useMemo(() =>
+    invs.map(inv => ({ ...inv, months: calcMonths(inv, settings.cdiRate, fx) })),
+    [invs, settings.cdiRate, fx]
+  );
+
+  const cons = useMemo(() => {
+    if (!projs.length) return [];
+    return Array.from({ length: 24 }, (_, i) => ({
+      mes:          projs[0].months[i].mes,
+      saldo:        projs.reduce((a,c) => a + c.months[i].saldo, 0),
+      rendimento:   projs.reduce((a,c) => a + c.months[i].rendimento, 0),
+      ir:           projs.reduce((a,c) => a + c.months[i].ir, 0),
+      saldoLiquido: projs.reduce((a,c) => a + c.months[i].saldoLiquido, 0),
+      rendLiquido:  projs.reduce((a,c) => a + c.months[i].rendLiquido, 0),
+    }));
+  }, [projs]);
+
+  const totalInv = invs.reduce((a, c) => {
+    const t = getType(c.tipo);
+    return a + c.valor * (t.currency ? (fx[t.currency] || 1) : 1);
+  }, 0);
+
+  const irAlerts   = useMemo(() => invs.map(i => ({ inv:i, a:getIRAlert(i) })).filter(x => x.a),   [invs]);
+  const vencAlerts = useMemo(() => invs.map(i => ({ inv:i, a:getVencAlert(i) })).filter(x => x.a), [invs]);
+  const urgent     = [...irAlerts.filter(x => x.a?.urgente), ...vencAlerts.filter(x => x.a?.urgente)];
+
+  // ── Handlers ────────────────────────────────────────────────────────────────
+  function saveInv(form) {
+    const v = parseFloat(String(form.valor).replace(",", "."));
+    const p = parseFloat(String(form.pct).replace(",", "."));
+    if (!form.nome?.trim() || isNaN(v) || v <= 0 || isNaN(p) || p <= 0 || !form.data || !form.tipo) {
+      toast_("Preencha todos os campos.", false); return;
+    }
+    const obj = { nome:form.nome.trim(), tipo:form.tipo, valor:v, pct:p, data:form.data, vencimento:form.vencimento||null, categoriaId:form.categoriaId||null };
+    let newInvs, newNii = nii;
+    if (!form.id) { newInvs = [...invs, { id:nii, ...obj }]; newNii++; }
+    else          { newInvs = invs.map(i => i.id === form.id ? { ...i, ...obj } : i); }
+    setInvs(newInvs); setNii(newNii); setModal(null);
+    save(newInvs, cats, settings, deps, newNii, nci, ndi, quotes, renda);
+    toast_("✓ Investimento salvo");
+  }
+
+  function delInv(id) {
+    const n = invs.filter(i => i.id !== id);
+    setInvs(n); save(n, cats, settings, deps, nii, nci, ndi, quotes);
+    toast_("✓ Removido");
+  }
+
+  function saveDep(form) {
+    const v = parseFloat(String(form.valor).replace(",", "."));
+    if (!form.invId || isNaN(v) || v <= 0 || !form.data) { toast_("Preencha todos os campos.", false); return; }
+    const newDeps = [...deps, { id:ndi, invId:form.invId, valor:v, data:form.data, obs:form.obs||"" }];
+    const newInvs = invs.map(i => i.id === form.invId ? { ...i, valor:i.valor+v } : i);
+    const newNdi  = ndi + 1;
+    setDeps(newDeps); setInvs(newInvs); setNdi(newNdi); setModal(null);
+    save(newInvs, cats, settings, newDeps, nii, nci, newNdi, quotes, renda);
+    toast_("✓ Aporte registrado");
+  }
+
+  function delDep(id) {
+    const d = deps.find(x => x.id === id);
+    if (!d) return;
+    const newDeps = deps.filter(x => x.id !== id);
+    const newInvs = invs.map(i => i.id === d.invId ? { ...i, valor:Math.max(0, i.valor-d.valor) } : i);
+    setDeps(newDeps); setInvs(newInvs);
+    save(newInvs, cats, settings, newDeps, nii, nci, ndi, quotes, renda);
+    toast_("✓ Aporte removido");
+  }
+
+  function saveCat(form) {
+    if (!form.nome?.trim()) { toast_("Nome obrigatório.", false); return; }
+    let newCats, newNci = nci;
+    if (!form.id) { newCats = [...cats, { id:nci, nome:form.nome.trim(), cor:form.cor||"#7ecfb3" }]; newNci++; }
+    else          { newCats = cats.map(c => c.id === form.id ? { ...c, nome:form.nome.trim(), cor:form.cor } : c); }
+    setCats(newCats); setNci(newNci); setModal(null);
+    save(invs, newCats, settings, deps, nii, newNci, ndi, quotes, renda);
+    toast_("✓ Categoria salva");
+  }
+
+  function delCat(id) {
+    const newCats = cats.filter(c => c.id !== id);
+    const newInvs = invs.map(i => i.categoriaId === id ? { ...i, categoriaId:null } : i);
+    setCats(newCats); setInvs(newInvs);
+    save(newInvs, newCats, settings, deps, nii, nci, ndi, quotes, renda);
+    toast_("✓ Categoria removida");
+  }
+
+  function saveSettings(s) {
+    setSettings(s); save(invs, cats, s, deps, nii, nci, ndi, quotes, renda);
+    toast_("✓ Configurações salvas");
+  }
+
+  function restoreSnap(snap) {
+    const restored = lsRestoreSnap(snap.data);
+    if (!restored) { toast_("✗ Erro ao restaurar versão.", false); return; }
+    setInvs(restored.investments   ?? []);
+    setCats(restored.categories    ?? DEF_CATS);
+    setSettings(restored.settings  ?? DEFAULT_SETTINGS);
+    setDeps(restored.deposits      ?? []);
+    setNii(restored.nii            ?? 1);
+    setNci(restored.nci            ?? 1);
+    setNdi(restored.ndi            ?? 1);
+    setQuotes(restored.quotes      ?? DEF_QUOTES);
+    setSnaps(lsLoadSnaps());
+    toast_(`✓ Versão de ${new Date(snap.ts).toLocaleString("pt-BR")} restaurada`);
+  }
+
+  function saveApiKey(key) {
+    try { localStorage.setItem("investpro_apikey", key); } catch(_) {}
+    setApiKey_(key);
+    toast_("✓ Chave de API salva");
+  }
+
+  async function fetchQuotes(watchlist) {
+    setQLoading(true);
+    try {
+      const data = await fetchAllQuotes(watchlist, apiKey);
+      const now  = new Date().toLocaleString("pt-BR");
+      const newQ = { ...quotes, watchlist, data, updatedAt: now, error: null };
+      setQuotes(newQ);
+      // Sync USD/EUR and CDI to settings
+      const newFx = { ...settings.fx };
+      if (data.currencies?.USD?.price) newFx.USD = data.currencies.USD.price;
+      if (data.currencies?.EUR?.price) newFx.EUR = data.currencies.EUR.price;
+      const newSet = { ...settings, fx: newFx };
+      if (data.cdi && data.cdi > 0) newSet.cdiRate = data.cdi;
+      setSettings(newSet);
+      save(invs, cats, newSet, deps, nii, nci, ndi, newQ, renda);
+      const cdiMsg = data.cdi ? ` · CDI ${fmtP(data.cdi)}` : "";
+      toast_(`✓ Cotações atualizadas${cdiMsg} — ${now}`);
+    } catch (e) {
+      const msg = e.message || "Erro desconhecido";
+      const newQ = { ...quotes, watchlist, error: msg };
+      setQuotes(newQ);
+      save(invs, cats, settings, deps, nii, nci, ndi, newQ, renda);
+      toast_(`✗ ${msg.substring(0, 80)}`, false);
+    } finally {
+      setQLoading(false);
+    }
+  }
+
+  function updateWatchlist(section, tickers) {
+    const newQ = { ...quotes, watchlist: { ...quotes.watchlist, [section]: tickers } };
+    setQuotes(newQ);
+    save(invs, cats, settings, deps, nii, nci, ndi, newQ, renda);
+  }
+
+  function saveRenda(mesIdx, data) {
+    const newRenda = { ...renda, [mesIdx]: data };
+    setRenda(newRenda);
+    save(invs, cats, settings, deps, nii, nci, ndi, quotes, newRenda);
+  }
+
+  function doImport(data) {
+    const ni = data.investments || [];
+    const nc = data.categories  || cats;
+    const ns = data.settings    || settings;
+    const nd = data.deposits    || [];
+    const nii2 = ni.length ? Math.max(...ni.map(i=>i.id))+1 : 1;
+    const nci2 = nc.length ? Math.max(...nc.map(c=>c.id))+1 : 1;
+    const ndi2 = nd.length ? Math.max(...nd.map(d=>d.id))+1 : 1;
+    setInvs(ni); setCats(nc); setSettings(ns); setDeps(nd);
+    setNii(nii2); setNci(nci2); setNdi(ndi2);
+    save(ni, nc, ns, nd, nii2, nci2, ndi2, quotes, renda);
+    setModal(null);
+    toast_(`✓ ${ni.length} investimentos importados`);
+  }
+
+  const sp = { invs, cats, settings, projs, cons, totalInv, deps, fx, isMobile, quotes, snaps, apiKey, renda };
+
+  return (
+    <div style={S.app}>
+      <style>{CSS}</style>
+
+      {toast && (
+        <div style={{ ...S.toast, bottom:isMobile?76:24, right:isMobile?12:24, left:isMobile?12:"auto", background:toast.ok?"#001a0a":"#1a0000", borderColor:toast.ok?"#00cc6644":"#cc000044", color:toast.ok?"#00cc66":"#ff6666" }}>
+          {toast.msg}
+        </div>
+      )}
+
+      {urgent.length > 0 && (
+        <AlertBanner urgent={urgent} />
+      )}
+
+      {!isMobile && (
+        <Sidebar sideOpen={sideOpen} setSideOpen={setSideOpen} screen={screen} setScreen={setScreen} />
+      )}
+
+      {isMobile && (
+        <div style={S.mobileBar}>
+          <span style={{ fontSize:26 }}>🪙</span>
+          <span style={S.logoText}>InvestPro</span>
+          <span style={S.mobileCdi}>CDI {fmtP(settings.cdiRate)}</span>
+        </div>
+      )}
+
+      <main style={{ ...S.main, marginLeft:isMobile?0:(sideOpen?236:64), padding:isMobile?"16px 14px 88px":"32px 32px 64px", marginTop:isMobile?54:0 }}>
+        {screen === "dashboard"   && <ScreenDashboard   {...sp} setScreen={setScreen} onAdd={() => setModal({t:"inv",d:{}})} irAlerts={irAlerts} vencAlerts={vencAlerts} />}
+        {screen === "investments" && <ScreenInvestments {...sp} onAdd={() => setModal({t:"inv",d:{}})} onEdit={inv => setModal({t:"inv",d:inv})} onDel={delInv} onDep={inv => setModal({t:"dep",d:{invId:inv.id}})} onExJSON={() => doExportJSON(invs,cats,settings,deps)} onExCSV={() => doExportCSV(invs)} onImport={() => setModal({t:"import"})} />}
+        {screen === "renda"       && <ScreenRenda       renda={renda} isMobile={isMobile} onSave={saveRenda} />}
+        {screen === "history"     && <ScreenHistory     {...sp} onAddDep={() => setModal({t:"dep",d:{}})} onDelDep={delDep} />}
+        {screen === "comparator"  && <ScreenComparator  {...sp} />}
+        {screen === "projection"  && <ScreenProjection  {...sp} />}
+        {screen === "quotes"      && <ScreenCotacoes    {...sp} onFetch={fetchQuotes} onUpdateWatchlist={updateWatchlist} qLoading={qLoading} />}
+        {screen === "categories"  && <ScreenCategories  {...sp} onAdd={() => setModal({t:"cat",d:{}})} onEdit={cat => setModal({t:"cat",d:cat})} onDel={delCat} />}
+        {screen === "settings"    && <ScreenSettings    {...sp} onSave={saveSettings} onRestore={restoreSnap} onSaveApiKey={saveApiKey} />}
+      </main>
+
+      {isMobile && (
+        <nav style={S.bottomBar}>
+          {NAV.map(item => (
+            <button key={item.id} style={{ ...S.bbItem, ...(screen===item.id ? S.bbActive : {}) }} onClick={() => setScreen(item.id)}>
+              <span style={{ fontSize:17 }}>{item.icon}</span>
+              <span style={S.bbLabel}>{item.label.split(" ")[0]}</span>
+            </button>
+          ))}
+        </nav>
+      )}
+
+      {modal?.t === "inv"    && <InvModal    data={modal.d} cats={cats} isMobile={isMobile} onSave={saveInv}    onClose={() => setModal(null)} />}
+      {modal?.t === "cat"    && <CatModal    data={modal.d}             isMobile={isMobile} onSave={saveCat}    onClose={() => setModal(null)} />}
+      {modal?.t === "dep"    && <DepModal    data={modal.d} invs={invs} isMobile={isMobile} onSave={saveDep}    onClose={() => setModal(null)} />}
+      {modal?.t === "import" && <ImportModal                            isMobile={isMobile} onImport={doImport} onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════════════════════════════════════════════
+function Sidebar({ sideOpen, setSideOpen, screen, setScreen }) {
+  return (
+    <aside style={{ ...S.sidebar, width:sideOpen?236:64 }}>
+
+      {/* Logo — clique abre/fecha */}
+      <div style={S.sidebarLogo} onClick={() => setSideOpen(o => !o)} title={sideOpen ? "Fechar menu" : "Abrir menu"}>
+        <span style={S.logoIcon}>🪙</span>
+        {sideOpen && <span style={S.logoText}>InvestPro</span>}
+        {sideOpen && <span style={{ marginLeft:"auto", fontSize:16, color:"#444", flexShrink:0 }}>←</span>}
+      </div>
+
+      <nav style={S.nav}>
+        {NAV.map(item => (
+          <button key={item.id}
+            style={{ ...S.navItem, ...(screen===item.id?S.navActive:{}), justifyContent:sideOpen?"flex-start":"center" }}
+            className={screen===item.id ? "" : "nav-hover"}
+            onClick={() => setScreen(item.id)}
+            title={!sideOpen ? item.label : undefined}>
+            <span style={S.navIcon}>{item.icon}</span>
+            {sideOpen && <span style={S.navLabel}>{item.label}</span>}
+          </button>
+        ))}
+      </nav>
+    </aside>
+  );
+}
+
+function SumRow({ label, value, color }) {
+  return (
+    <div style={{ marginTop:8 }}>
+      <div style={S.sl}>{label}</div>
+      <div style={{ ...S.sv, color }}>{value}</div>
+    </div>
+  );
+}
+
+function MetaBar({ pct }) {
+  return (
+    <div style={{ marginTop:8 }}>
+      <div style={S.sl}>Meta {pct.toFixed(0)}%</div>
+      <div style={{ height:4, background:"#1e1c16", borderRadius:2, marginTop:4 }}>
+        <div style={{ height:4, background:"#b77ee2", borderRadius:2, width:`${pct}%`, transition:"width .4s" }} />
+      </div>
+    </div>
+  );
+}
+
+function AlertBanner({ urgent }) {
+  const msgs = urgent.slice(0, 3).map(x => {
+    if (x.a?.proxima) return `IR ${x.inv.nome}: ${x.a.faixa}→${x.a.proxima} em ${x.a.diasRestantes}d`;
+    return `Venc. ${x.inv.nome}: ${x.a.label}`;
+  });
+  return (
+    <div style={S.alertBanner}>
+      <span>⚠️</span>
+      <span style={{ flex:1, fontSize:11 }}>{msgs.join(" · ")}</span>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCREENS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function ScreenDashboard({ invs, cats, settings, projs, cons, totalInv, deps, fx, isMobile, setScreen, onAdd, irAlerts, vencAlerts }) {
+  const last12  = cons[11];
+  const next1   = cons[0];
+  const meta    = settings.meta;
+  const metaPct = meta?.ativa && meta.valor > 0 ? Math.min(100, totalInv / meta.valor * 100) : null;
+
+  const byType = TYPES.map(t => ({
+    ...t,
+    value: invs.filter(i => i.tipo === t.id).reduce((a, c) => a + c.valor * (t.currency ? (fx[t.currency]||1) : 1), 0)
+  })).filter(t => t.value > 0);
+
+  const byCat = cats.map(cat => ({
+    name:  cat.nome,
+    color: cat.cor,
+    value: invs.filter(i => i.categoriaId === cat.id).reduce((a, c) => {
+      const t = getType(c.tipo);
+      return a + c.valor * (t.currency ? (fx[t.currency]||1) : 1);
+    }, 0),
+  })).filter(c => c.value > 0);
+
+  const areaData = cons.slice(0, 12).map(r => ({
+    mes:        r.mes.split(" ")[0],
+    "Líquido":  r.saldoLiquido,
+    "Bruto":    r.saldo,
+    "Principal": totalInv,
+  }));
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Dashboard" subtitle="Visão geral">
+        <Btn onClick={onAdd}>+ Novo</Btn>
+      </PageHeader>
+
+      <div style={P.kpiRow} className="kpi-row">
+        <KPI label="Total Investido"     value={fmt(totalInv)}                   color="#F5C518" icon="◎" />
+        <KPI label="Patrimônio 12m"      value={fmt(last12?.saldoLiquido ?? 0)}  color="#ffffff" icon="◈" />
+        <KPI label="IR estimado 12m"     value={fmt(last12?.ir ?? 0)}            color="#ff6666" icon="⊠" />
+        <KPI label="Rend. próximo mês"   value={`+${fmt(next1?.rendLiquido ?? 0)}`} color="#aaaaaa" icon="◬" />
+      </div>
+
+      {metaPct !== null && (
+        <div style={P.metaCard}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <span style={{ color:"#b77ee2", fontWeight:700, fontSize:13 }}>
+              🎯 Meta · <span style={{ color:"#6a6458", fontWeight:400, fontSize:11, fontFamily:"IBM Plex Mono,monospace" }}>{fmt(totalInv)} de {fmt(meta.valor)}</span>
+            </span>
+            <span style={{ color:"#b77ee2", fontWeight:800, fontFamily:"IBM Plex Mono,monospace" }}>{metaPct.toFixed(1)}%</span>
+          </div>
+          <div style={P.metaTrack}><div style={{ ...P.metaFill, width:`${metaPct}%` }} /></div>
+          <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, fontSize:10, color:"#4a4438", fontFamily:"IBM Plex Mono,monospace" }}>
+            <span>Faltam {fmt(Math.max(0, meta.valor - totalInv))}</span>
+            <span>Prazo: {meta.prazo}m</span>
+          </div>
+        </div>
+      )}
+
+      <div style={{ ...P.grid2, gridTemplateColumns:isMobile?"1fr":"1fr 1fr" }}>
+        <ChartCard title="Evolução Patrimonial — 12m">
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={areaData} margin={{ top:8, right:8, left:0, bottom:0 }}>
+              <defs>
+                {[["l","#7ecfb3"],["b","#e2c97e"],["p","#3a3020"]].map(([id, c]) => (
+                  <linearGradient key={id} id={`g${id}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor={c} stopOpacity={0.3} />
+                    <stop offset="100%" stopColor={c} stopOpacity={0.02} />
+                  </linearGradient>
+                ))}
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" vertical={false} />
+              <XAxis dataKey="mes" tick={{ fill:"#6a6458", fontSize:10 }} axisLine={{ stroke:"#2a2820" }} tickLine={false} />
+              <YAxis tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} width={52} />
+              <Tooltip content={<ChartTip />} />
+              <Area type="monotone" dataKey="Principal" stroke="#4a4030" strokeWidth={1} fill="url(#gp)" strokeDasharray="4 3" dot={false} />
+              <Area type="monotone" dataKey="Bruto"     stroke="#e2c97e" strokeWidth={1.5} fill="url(#gb)" dot={false} />
+              <Area type="monotone" dataKey="Líquido"   stroke="#7ecfb3" strokeWidth={2}   fill="url(#gl)" dot={false} activeDot={{ r:4 }} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Alocação por Tipo">
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={byType} dataKey="value" nameKey="label" cx="50%" cy="50%" outerRadius={75} innerRadius={42} paddingAngle={3}
+                label={({ label: lb, percent }) => `${lb} ${(percent*100).toFixed(0)}%`}
+                labelLine={{ stroke:"#2a2820" }}>
+                {byType.map((t, i) => <Cell key={i} fill={t.color} stroke="#0e0d0b" strokeWidth={2} />)}
+              </Pie>
+              <Tooltip formatter={v => fmt(v)} contentStyle={{ background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, fontFamily:"IBM Plex Mono,monospace", fontSize:11 }} />
+            </PieChart>
+          </ResponsiveContainer>
+        </ChartCard>
+      </div>
+
+      <div style={{ ...P.grid2, gridTemplateColumns:isMobile?"1fr":"1fr 1fr" }}>
+        <ChartCard title="🔔 Vencimentos">
+          {vencAlerts.length === 0
+            ? <Muted>✓ Nenhum vencimento próximo (90 dias).</Muted>
+            : vencAlerts.map(({ inv, a }) => (
+              <AlertRow key={inv.id} name={inv.nome} sub={`Vence: ${fmtD(inv.vencimento)}`} badge={a.label} badgeColor={a.cor} urgent={a.urgente} />
+            ))
+          }
+        </ChartCard>
+
+        <ChartCard title="⚠️ Alertas de IR">
+          {irAlerts.length === 0
+            ? <Muted>✓ Nenhum investimento próximo de mudar de faixa.</Muted>
+            : irAlerts.map(({ inv, a }) => (
+              <AlertRow key={inv.id} name={inv.nome} sub={`IR: ${a.faixa} → ${a.proxima}`} badge={`${a.diasRestantes}d`} badgeColor={a.urgente?"#e27e9a":"#e2c97e"} urgent={a.urgente} />
+            ))
+          }
+        </ChartCard>
+      </div>
+
+      {byCat.length > 0 && (
+        <ChartCard title="Distribuição por Categoria">
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={byCat} layout="vertical" margin={{ top:4, right:8, left:0, bottom:0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" horizontal={false} />
+              <XAxis type="number" tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" tick={{ fill:"#c9bfaa", fontSize:11, fontFamily:"IBM Plex Mono" }} axisLine={false} tickLine={false} width={90} />
+              <Tooltip formatter={v => fmt(v)} contentStyle={{ background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, fontFamily:"IBM Plex Mono,monospace", fontSize:11 }} />
+              <Bar dataKey="value" radius={[0,4,4,0]}>
+                {byCat.map((c, i) => <Cell key={i} fill={c.color} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+      )}
+    </div>
+  );
+}
+
+function ScreenInvestments({ invs, cats, projs, fx, isMobile, onAdd, onEdit, onDel, onDep, onExJSON, onExCSV, onImport }) {
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+
+  const filtered = projs.filter(inv =>
+    (filter === "all" || inv.tipo === filter) &&
+    inv.nome.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Investimentos" subtitle={`${invs.length} ativo${invs.length !== 1 ? "s" : ""}`}>
+        <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+          <BtnSec onClick={onImport}>⬆ Importar</BtnSec>
+          <BtnSec onClick={onExCSV}>⬇ CSV</BtnSec>
+          <BtnSec onClick={onExJSON}>⬇ JSON</BtnSec>
+          <Btn onClick={onAdd}>+ Novo</Btn>
+        </div>
+      </PageHeader>
+
+      <div style={P.filterRow} className="filter-row">
+        <input style={P.search} className="search-input" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
+        <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
+          <Chip active={filter==="all"} onClick={() => setFilter("all")}>Todos</Chip>
+          {TYPES.filter(t => invs.some(i => i.tipo === t.id)).map(t => (
+            <Chip key={t.id} active={filter===t.id} onClick={() => setFilter(t.id)} color={t.color}>{t.icon} {t.label}</Chip>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0
+        ? <Empty>Nenhum investimento encontrado.</Empty>
+        : (
+          <div style={P.cardGrid}>
+            {filtered.map(inv => (
+              <InvCard key={inv.id} inv={inv} cats={cats} fx={fx} onEdit={onEdit} onDel={onDel} onDep={onDep} />
+            ))}
+          </div>
+        )
       }
-      setModal(null);
+    </div>
+  );
+}
+
+function InvCard({ inv, cats, fx, onEdit, onDel, onDep }) {
+  const t       = getType(inv.tipo);
+  const cat     = cats.find(c => c.id === inv.categoriaId);
+  const last    = inv.months[11];
+  const fxRate  = t.currency ? (fx[t.currency] || 1) : 1;
+  const valBRL  = inv.valor * fxRate;
+  const gain    = last.rendLiquido;
+  const gainPct = valBRL > 0 ? gain / valBRL * 100 : 0;
+  const irAlert = getIRAlert(inv);
+  const va      = getVencAlert(inv);
+
+  return (
+    <div style={{ ...P.invCard, borderColor:t.color+"55" }} className="card-hover">
+      <div style={P.invCardTop}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{ ...P.typeIcon, background:t.color+"22", color:t.color }}>{t.icon}</span>
+          <div>
+            <div style={{ color:"#f0ebe0", fontWeight:700, fontSize:14 }}>{inv.nome}</div>
+            <div style={{ color:t.color, fontSize:11, fontFamily:"IBM Plex Mono,monospace" }}>{t.label}{t.currency && ` · ${t.currency}`}</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:5 }}>
+          <IBtn onClick={() => onDep(inv)} title="Registrar aporte">💰</IBtn>
+          <IBtn onClick={() => onEdit(inv)}>✏️</IBtn>
+          <IBtn onClick={() => onDel(inv.id)}>🗑</IBtn>
+        </div>
+      </div>
+
+      {cat && <div style={{ ...P.catTag, borderColor:cat.cor, color:cat.cor }}>{cat.nome}</div>}
+      {va && <div style={{ ...P.pill, borderColor:va.cor+"66", color:va.cor }}>🔔 Vence: {fmtD(inv.vencimento)} ({va.label})</div>}
+      {irAlert && <div style={{ ...P.pill, borderColor:irAlert.urgente?"#e27e9a66":"#e2c97e44", color:irAlert.urgente?"#e27e9a":"#e2c97e" }}>⚠️ IR: {irAlert.faixa}→{irAlert.proxima} em {irAlert.diasRestantes}d</div>}
+
+      <div style={P.metrics}>
+        <Met label={t.currency ? `Valor (${t.currency})` : "Investido"} value={t.currency ? fmtFX(inv.valor, t.currency) : fmt(inv.valor)} />
+        {t.currency && <Met label="Valor (BRL)" value={fmt(valBRL)} accent="#9a9080" />}
+        <Met label={t.intl ? "Retorno a.a." : "% CDI"}    value={fmtP(inv.pct)} />
+        <Met label="Saldo 12m"  value={fmt(last.saldoLiquido)} accent="#7ecfb3" />
+        <Met label="Rend. líq." value={`+${fmt(gain)}`}         accent="#7ecfb3" />
+        <Met label="Retorno %"  value={`+${gainPct.toFixed(2)}%`} accent="#7eb8e2" />
+        {t.ir && <Met label="IR 12m" value={`-${fmt(last.ir)}`} accent="#e27e9a" />}
+      </div>
+
+      {inv.vencimento && <div style={P.dateTag}>Vence: {fmtD(inv.vencimento)}</div>}
+      <div style={P.dateTag}>Início: {fmtD(inv.data)}</div>
+    </div>
+  );
+}
+
+function ScreenHistory({ invs, deps, isMobile, onAddDep, onDelDep }) {
+  const [filterInv, setFilterInv] = useState("all");
+
+  const sorted   = [...deps].sort((a, b) => new Date(b.data) - new Date(a.data));
+  const filtered = filterInv === "all" ? sorted : sorted.filter(d => d.invId === parseInt(filterInv));
+  const totalDep = deps.reduce((a, d) => a + d.valor, 0);
+
+  const byMonth = useMemo(() => {
+    const map = {};
+    deps.forEach(d => {
+      const key = new Date(d.data + "T12:00:00").toLocaleDateString("pt-BR", { month:"short", year:"numeric" });
+      map[key] = (map[key] || 0) + d.valor;
+    });
+    return Object.entries(map).slice(-12).map(([mes, valor]) => ({ mes, valor }));
+  }, [deps]);
+
+  const byInv = useMemo(() => {
+    const map = {};
+    deps.forEach(d => { map[d.invId] = (map[d.invId] || 0) + d.valor; });
+    return map;
+  }, [deps]);
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Histórico de Aportes" subtitle={`${deps.length} aporte${deps.length!==1?"s":""} · ${fmt(totalDep)}`}>
+        <Btn onClick={onAddDep}>+ Registrar Aporte</Btn>
+      </PageHeader>
+
+      <div style={P.kpiRow} className="kpi-row">
+        <KPI label="Total aportado"   value={fmt(totalDep)}                                          color="#F5C518" icon="◎" />
+        <KPI label="Média por aporte" value={deps.length ? fmt(totalDep/deps.length) : "R$ 0"}      color="#aaaaaa" icon="◬" />
+        <KPI label="Ativos com aportes" value={`${Object.keys(byInv).length}`}                      color="#ffffff" icon="◈" />
+        <KPI label="Último aporte"    value={sorted[0] ? fmtD(sorted[0].data) : "—"}                color="#F5C518" icon="◫" />
+      </div>
+
+      <div style={{ ...P.grid2, gridTemplateColumns:isMobile?"1fr":"2fr 1fr" }}>
+        <ChartCard title="Aportes por Mês">
+          {byMonth.length === 0
+            ? <Empty>Nenhum aporte registrado.</Empty>
+            : (
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={byMonth} margin={{ top:8, right:8, left:0, bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" vertical={false} />
+                  <XAxis dataKey="mes" tick={{ fill:"#6a6458", fontSize:10 }} axisLine={{ stroke:"#2a2820" }} tickLine={false} />
+                  <YAxis tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} width={52} />
+                  <Tooltip content={<ChartTip />} />
+                  <Bar dataKey="valor" fill="#e2c97e" radius={[4,4,0,0]} fillOpacity={0.85} />
+                </BarChart>
+              </ResponsiveContainer>
+            )
+          }
+        </ChartCard>
+
+        <ChartCard title="Por Investimento">
+          {invs.filter(i => byInv[i.id]).length === 0
+            ? <Muted>Sem aportes.</Muted>
+            : invs.filter(i => byInv[i.id]).map(inv => {
+              const t   = getType(inv.tipo);
+              const val = byInv[inv.id] || 0;
+              const pct = totalDep > 0 ? val / totalDep * 100 : 0;
+              return (
+                <div key={inv.id} style={{ marginBottom:10 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                    <span style={{ color:"#c9bfaa", fontSize:12 }}>{t.icon} {inv.nome}</span>
+                    <span style={{ color:t.color, fontFamily:"IBM Plex Mono,monospace", fontSize:11 }}>{fmt(val)}</span>
+                  </div>
+                  <div style={{ height:4, background:"#1e1c16", borderRadius:2 }}>
+                    <div style={{ height:4, background:t.color, borderRadius:2, width:`${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })
+          }
+        </ChartCard>
+      </div>
+
+      <ChartCard title="Todos os Aportes">
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, flexWrap:"wrap", gap:8 }}>
+          <div />
+          <select style={{ ...P.search, width:"auto", cursor:"pointer" }} value={filterInv} onChange={e => setFilterInv(e.target.value)}>
+            <option value="all">Todos</option>
+            {invs.map(inv => <option key={inv.id} value={inv.id}>{inv.nome}</option>)}
+          </select>
+        </div>
+        {filtered.length === 0
+          ? <Muted>Nenhum aporte encontrado.</Muted>
+          : (
+            <div style={{ overflowX:"auto" }}>
+              <table style={P.table}>
+                <thead><tr>
+                  <th style={P.th}>Data</th>
+                  <th style={P.th}>Investimento</th>
+                  <th style={P.th}>Valor</th>
+                  <th style={P.th}>Obs.</th>
+                  <th style={P.th}></th>
+                </tr></thead>
+                <tbody>
+                  {filtered.map(dep => {
+                    const inv = invs.find(i => i.id === dep.invId);
+                    const t   = getType(inv?.tipo);
+                    return (
+                      <tr key={dep.id} style={P.tr}>
+                        <td style={{ ...P.td, color:"#c9bfaa" }}>{fmtD(dep.data)}</td>
+                        <td style={{ ...P.td, color:t.color }}>{t.icon} {inv?.nome || "—"}</td>
+                        <td style={{ ...P.td, color:"#7ecfb3", fontWeight:600 }}>{fmt(dep.valor)}</td>
+                        <td style={{ ...P.td, color:"#6a6458", fontSize:11 }}>{dep.obs || "—"}</td>
+                        <td style={P.td}><IBtn onClick={() => onDelDep(dep.id)}>🗑</IBtn></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
+      </ChartCard>
+    </div>
+  );
+}
+
+function ScreenComparator({ invs, projs, isMobile }) {
+  const [selA, setSelA] = useState(invs[0]?.id ?? null);
+  const [selB, setSelB] = useState(invs[1]?.id ?? null);
+
+  const invA = projs.find(p => p.id === selA);
+  const invB = projs.find(p => p.id === selB);
+
+  const chartData = invA && invB
+    ? Array.from({ length:12 }, (_, i) => ({
+        mes:          invA.months[i].mes.split(" ")[0],
+        [invA.nome]:  invA.months[i].saldoLiquido,
+        [invB.nome]:  invB.months[i].saldoLiquido,
+      }))
+    : [];
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Comparador" subtitle="Compare dois investimentos lado a lado" />
+
+      {invs.length < 2
+        ? <Empty>Cadastre ao menos 2 investimentos para comparar.</Empty>
+        : (
+          <>
+            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:16, marginBottom:20 }}>
+              {[{ sel:selA, set:setSelA, label:"Investimento A", color:"#e2c97e" },
+                { sel:selB, set:setSelB, label:"Investimento B", color:"#7eb8e2" }].map(({ sel, set, label, color }) => (
+                <CompSelector key={label} sel={sel} setSel={set} label={label} color={color} invs={invs} projs={projs} />
+              ))}
+            </div>
+
+            {invA && invB && (
+              <>
+                <ChartCard title="Saldo Líquido — 12 meses">
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={chartData} margin={{ top:8, right:8, left:0, bottom:0 }}>
+                      <defs>
+                        <linearGradient id="cA" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%"   stopColor="#e2c97e" stopOpacity={0.3} />
+                          <stop offset="100%" stopColor="#e2c97e" stopOpacity={0.02} />
+                        </linearGradient>
+                        <linearGradient id="cB" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%"   stopColor="#7eb8e2" stopOpacity={0.3} />
+                          <stop offset="100%" stopColor="#7eb8e2" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" vertical={false} />
+                      <XAxis dataKey="mes" tick={{ fill:"#6a6458", fontSize:10 }} axisLine={{ stroke:"#2a2820" }} tickLine={false} />
+                      <YAxis tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} width={56} />
+                      <Tooltip content={<ChartTip />} />
+                      <Legend wrapperStyle={{ fontFamily:"IBM Plex Mono", fontSize:10, color:"#6a6458" }} iconType="circle" iconSize={7} />
+                      <Area type="monotone" dataKey={invA.nome} stroke="#e2c97e" strokeWidth={2} fill="url(#cA)" dot={false} />
+                      <Area type="monotone" dataKey={invB.nome} stroke="#7eb8e2" strokeWidth={2} fill="url(#cB)" dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </ChartCard>
+
+                <div style={{ marginTop:16 }}>
+                  <ChartCard title="Confronto direto — 12 meses">
+                    <CompTable invA={invA} invB={invB} />
+                  </ChartCard>
+                </div>
+              </>
+            )}
+          </>
+        )
+      }
+    </div>
+  );
+}
+
+function CompSelector({ sel, setSel, label, color, invs, projs }) {
+  const inv = projs.find(p => p.id === sel);
+  return (
+    <div style={{ ...P.chartCard, borderColor:color+"44" }}>
+      <div style={{ ...P.chartTitle, color }}>{label}</div>
+      <select style={{ ...P.search, width:"100%", cursor:"pointer" }} value={sel ?? ""} onChange={e => setSel(parseInt(e.target.value))}>
+        {invs.map(i => <option key={i.id} value={i.id}>{i.nome}</option>)}
+      </select>
+      {inv && (
+        <div style={{ marginTop:12, display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+          <Met label="Investido"  value={fmt(inv.valor)} />
+          <Met label="% CDI/Ret." value={fmtP(inv.pct)} />
+          <Met label="Saldo 12m"  value={fmt(inv.months[11].saldoLiquido)} accent={color} />
+          <Met label="Rend. líq." value={`+${fmt(inv.months[11].rendLiquido)}`} accent={color} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompTable({ invA, invB }) {
+  const rows = [
+    { label:"Valor investido",   a:invA.valor,                                 b:invB.valor },
+    { label:"Saldo bruto 12m",   a:invA.months[11].saldo,                      b:invB.months[11].saldo },
+    { label:"IR 12m",            a:invA.months[11].ir,                         b:invB.months[11].ir, lower:true },
+    { label:"Saldo líquido 12m", a:invA.months[11].saldoLiquido,               b:invB.months[11].saldoLiquido },
+    { label:"Rend. líquido 12m", a:invA.months[11].rendLiquido,                b:invB.months[11].rendLiquido },
+    { label:"Retorno %",         a:invA.months[11].rendLiquido/invA.valor*100,  b:invB.months[11].rendLiquido/invB.valor*100, pct:true },
+  ];
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <table style={P.table}>
+        <thead><tr>
+          <th style={P.th}>Métrica</th>
+          <th style={{ ...P.th, color:"#e2c97e" }}>{invA.nome}</th>
+          <th style={{ ...P.th, color:"#7eb8e2" }}>{invB.nome}</th>
+          <th style={{ ...P.th, color:"#7ecfb3" }}>Vencedor</th>
+        </tr></thead>
+        <tbody>
+          {rows.map(({ label, a, b, lower, pct }) => {
+            const w = lower ? (a<b?"A":b<a?"B":null) : (a>b?"A":b>a?"B":null);
+            return (
+              <tr key={label} style={P.tr}>
+                <td style={{ ...P.td, color:"#9a9080" }}>{label}</td>
+                <td style={{ ...P.td, color:w==="A"?"#7ecfb3":"#b0a990", fontWeight:w==="A"?700:400 }}>{pct ? fmtP(a) : fmt(a)}</td>
+                <td style={{ ...P.td, color:w==="B"?"#7ecfb3":"#b0a990", fontWeight:w==="B"?700:400 }}>{pct ? fmtP(b) : fmt(b)}</td>
+                <td style={P.td}>
+                  {w === "A" && <span style={{ color:"#e2c97e", fontWeight:700 }}>🏆 {invA.nome}</span>}
+                  {w === "B" && <span style={{ color:"#7eb8e2", fontWeight:700 }}>🏆 {invB.nome}</span>}
+                  {!w        && <span style={{ color:"#4a4438" }}>—</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ScreenProjection({ invs, projs, cons, totalInv, settings, isMobile }) {
+  const [view,   setView]   = useState("liquido");
+  const [months, setMonths] = useState(12);
+  const isLiq = view === "liquido";
+  const rows  = cons.slice(0, months);
+  const last  = rows[rows.length - 1];
+
+  const barData = rows.map((r, i) => {
+    const prev = rows[i - 1];
+    return {
+      mes:            r.mes.split(" ")[0],
+      "Rend. Bruto":  i===0 ? r.rendimento  : r.rendimento  - (prev?.rendimento  ?? 0),
+      "Rend. Líquido":i===0 ? r.rendLiquido  : r.rendLiquido - (prev?.rendLiquido ?? 0),
+      "IR":           i===0 ? r.ir           : r.ir          - (prev?.ir          ?? 0),
     };
+  });
 
-    return (
-      <div style={{ padding: "30px", maxWidth: "1200px", margin: "0 auto" }}>
-        {/* ... (Header e KPIs iguais) ... */}
+  return (
+    <div style={P.root}>
+      <PageHeader title="Projeção" subtitle={`CDI ${fmtP(settings.cdiRate)} a.a.`}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <Toggle options={["liquido","bruto"]} labels={["Líquido","Bruto"]} value={view} onChange={setView} />
+          <Toggle options={[12,24]} labels={["12m","24m"]} value={months} onChange={setMonths} />
+        </div>
+      </PageHeader>
 
-        {/* ... (Gráficos iguais) ... */}
+      {cons.length === 0
+        ? <Empty>Adicione investimentos para ver a projeção.</Empty>
+        : (
+          <>
+            <div style={P.kpiRow} className="kpi-row">
+              <KPI label={`Saldo (${months}m)`}  value={fmt(isLiq ? last?.saldoLiquido : last?.saldo)}       color="#ffffff" icon="◈" />
+              <KPI label="Rendimento total"        value={`+${fmt(isLiq ? last?.rendLiquido : last?.rendimento)}`} color="#aaaaaa" icon="◬" />
+              <KPI label="IR total"                value={`-${fmt(last?.ir ?? 0)}`}                          color="#ff6666" icon="⊠" />
+              <KPI label="Retorno s/ capital"      value={fmtP(((last?.rendLiquido ?? 0) / totalInv) * 100)} color="#F5C518" icon="◎" />
+            </div>
 
-        {/* Modal Corrigido */}
-        {modal && (
-          <div style={styles.overlay}>
-            <div style={styles.modal}>
-              <h2 style={{ marginBottom: "20px" }}>{modal.id ? "Editar Ativo" : "Novo Ativo"}</h2>
-              
-              <label style={styles.label}>Nome do Investimento</label>
-              <input style={styles.input} defaultValue={modal.nome} id="m_nome" />
-              
-              <label style={styles.label}>Instituição (Banco)</label>
-              <select style={styles.input} defaultValue={modal.banco || "Nubank"} id="m_banco">
-                {Object.keys(BANK_COLORS).map(b => <option key={b} value={b}>{b}</option>)}
-              </select>
+            <ChartCard title="Rendimento Mensal Incremental">
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={barData} margin={{ top:8, right:8, left:0, bottom:0 }} barCategoryGap="30%">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" vertical={false} />
+                  <XAxis dataKey="mes" tick={{ fill:"#6a6458", fontSize:10 }} axisLine={{ stroke:"#2a2820" }} tickLine={false} />
+                  <YAxis tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} width={56} />
+                  <Tooltip content={<ChartTip />} />
+                  <Legend wrapperStyle={{ fontFamily:"IBM Plex Mono", fontSize:10, color:"#6a6458", paddingTop:4 }} iconType="square" iconSize={8} />
+                  <Bar dataKey="Rend. Bruto"   fill="#e2c97e" radius={[3,3,0,0]} fillOpacity={0.85} />
+                  <Bar dataKey="IR"            fill="#e27e9a" radius={[3,3,0,0]} fillOpacity={0.85} />
+                  <Bar dataKey="Rend. Líquido" fill="#7ecfb3" radius={[3,3,0,0]} fillOpacity={0.85} />
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartCard>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                <div>
-                  <label style={styles.label}>Valor (R$)</label>
-                  <input style={styles.input} type="number" defaultValue={modal.valor} id="m_valor" />
+            <div style={{ marginTop:16 }}>
+              <ChartCard title="Tabela Detalhada">
+                <div style={{ overflowX:"auto" }}>
+                  <table style={P.table}>
+                    <thead><tr>
+                      <th style={P.th}>Mês</th>
+                      {projs.map(p => <th key={p.id} style={{ ...P.th, color:"#e2c97e" }}>{p.nome}</th>)}
+                      {projs.length > 1 && <th style={{ ...P.th, color:"#7ecfb3" }}>Total</th>}
+                      <th style={{ ...P.th, color:"#e27e9a" }}>IR</th>
+                      <th style={{ ...P.th, color:"#7eb8e2" }}>Rend. Líq.</th>
+                    </tr></thead>
+                    <tbody>
+                      {rows.map((row, i) => (
+                        <tr key={i} style={P.tr}>
+                          <td style={{ ...P.td, color:"#c9bfaa", fontWeight:600 }}>{row.mes}</td>
+                          {projs.map(p => (
+                            <td key={p.id} style={{ ...P.td, color:isLiq?"#7ecfb3":"#b0a990" }}>
+                              {fmt(isLiq ? p.months[i].saldoLiquido : p.months[i].saldo)}
+                            </td>
+                          ))}
+                          {projs.length > 1 && (
+                            <td style={{ ...P.td, color:"#7ecfb3", fontWeight:700 }}>
+                              {fmt(isLiq ? row.saldoLiquido : row.saldo)}
+                            </td>
+                          )}
+                          <td style={{ ...P.td, color:"#e27e9a" }}>-{fmt(row.ir)}</td>
+                          <td style={{ ...P.td, color:"#7eb8e2", fontWeight:600 }}>+{fmt(row.rendLiquido)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                <div>
-                  <label style={styles.label}>% CDI</label>
-                  <input style={styles.input} type="number" defaultValue={modal.pct} id="m_pct" />
-                </div>
-              </div>
+                <p style={P.note}>* CDI {fmtP(settings.cdiRate)} a.a. IR regressivo. Estimativas.</p>
+              </ChartCard>
+            </div>
+          </>
+        )
+      }
+    </div>
+  );
+}
 
-              <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
-                <button onClick={() => setModal(null)} style={styles.btnSec}>Cancelar</button>
-                <button onClick={() => {
-                  saveInv({
-                    id: modal.id, // Aqui passamos o ID original se for edição
-                    nome: document.getElementById('m_nome').value,
-                    banco: document.getElementById('m_banco').value,
-                    valor: document.getElementById('m_valor').value,
-                    pct: document.getElementById('m_pct').value,
-                    tipo: "cdb",
-                    data: "2024-01-01"
-                  });
-                }} style={styles.btnMain}>Salvar</button>
-              </div>
+function ScreenCategories({ invs, cats, isMobile, onAdd, onEdit, onDel }) {
+  return (
+    <div style={P.root}>
+      <PageHeader title="Categorias" subtitle="Organize seus investimentos">
+        <Btn onClick={onAdd}>+ Nova</Btn>
+      </PageHeader>
+      {cats.length === 0
+        ? <Empty>Nenhuma categoria criada.</Empty>
+        : (
+          <div style={P.cardGrid}>
+            {cats.map(cat => {
+              const catInvs = invs.filter(i => i.categoriaId === cat.id);
+              const total   = catInvs.reduce((a, c) => a + c.valor, 0);
+              return (
+                <div key={cat.id} style={{ ...P.invCard, borderColor:cat.cor+"66" }} className="card-hover">
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <div style={{ width:14, height:14, borderRadius:3, background:cat.cor, flexShrink:0 }} />
+                      <span style={{ color:"#f0ebe0", fontWeight:700, fontSize:15 }}>{cat.nome}</span>
+                    </div>
+                    <div style={{ display:"flex", gap:6 }}>
+                      <IBtn onClick={() => onEdit(cat)}>✏️</IBtn>
+                      <IBtn onClick={() => onDel(cat.id)}>🗑</IBtn>
+                    </div>
+                  </div>
+                  <div style={{ marginTop:14 }}>
+                    <div style={{ color:cat.cor, fontSize:20, fontWeight:800, fontFamily:"IBM Plex Mono,monospace" }}>{fmt(total)}</div>
+                    <div style={{ color:"#6a6458", fontSize:12, marginTop:3 }}>{catInvs.length} investimento{catInvs.length!==1?"s":""}</div>
+                  </div>
+                  {catInvs.length > 0 && (
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginTop:10 }}>
+                      {catInvs.map(inv => {
+                        const t = getType(inv.tipo);
+                        return (
+                          <span key={inv.id} style={{ background:"#13120f", border:`1px solid ${t.color}44`, borderRadius:4, padding:"2px 8px", fontSize:11, color:t.color, fontFamily:"IBM Plex Mono,monospace" }}>
+                            {t.icon} {inv.nome}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )
+      }
+    </div>
+  );
+}
+
+function ScreenSettings({ invs, settings, isMobile, onSave, snaps, onRestore, apiKey, onSaveApiKey }) {
+  const [form,      setForm]      = useState({
+    cdiRate: settings.cdiRate,
+    fx:   { ...FX_DEFAULT, ...settings.fx },
+    meta: { ativa:false, valor:100000, prazo:24, ...settings.meta },
+  });
+  const [keyInput,  setKeyInput]  = useState(apiKey || "");
+  const [showKey,   setShowKey]   = useState(false);
+
+  useEffect(() => {
+    setForm(f => ({ ...f, cdiRate: settings.cdiRate }));
+  }, [settings.cdiRate]);
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Configurações" subtitle="Personalize os parâmetros" />
+      <div style={{ maxWidth:520 }}>
+
+        {/* ── Chave de API ── */}
+        <div style={{ ...P.setCard, borderColor: apiKey ? "#7ecfb344" : "#e2c97e44" }}>
+          <div style={P.setTitle}>🔑 Chave de API Anthropic</div>
+          <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"10px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginBottom:14, lineHeight:1.7 }}>
+            Necessária para buscar cotações. Obtenha gratuitamente em{" "}
+            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer"
+              style={{ color:"#e2c97e", textDecoration:"underline" }}>
+              console.anthropic.com/settings/keys
+            </a>
+          </div>
+          {apiKey ? (
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, background:"#081f12", border:"1px solid #7ecfb344", borderRadius:8, padding:"10px 14px" }}>
+              <span style={{ fontSize:16 }}>✓</span>
+              <span style={{ color:"#7ecfb3", fontSize:12, fontFamily:"IBM Plex Mono,monospace", flex:1 }}>Chave configurada (sk-ant-...{apiKey.slice(-6)})</span>
+              <button style={{ ...P.iBtn, fontSize:11 }} onClick={() => { setKeyInput(""); onSaveApiKey(""); }}>Remover</button>
+            </div>
+          ) : (
+            <div style={{ background:"#1a0e08", border:"1px solid #e2c97e44", borderRadius:8, padding:"10px 14px", marginBottom:10, fontSize:11, color:"#e2c97e", fontFamily:"IBM Plex Mono,monospace" }}>
+              ⚠️ Sem chave configurada — cotações não funcionarão.
+            </div>
+          )}
+          <label style={P.label}>Cole sua chave aqui</label>
+          <div style={{ display:"flex", gap:8 }}>
+            <div style={{ flex:1, position:"relative" }}>
+              <input
+                style={{ ...P.input, paddingRight:40, fontFamily:"IBM Plex Mono,monospace", fontSize:12 }}
+                type={showKey ? "text" : "password"}
+                value={keyInput}
+                onChange={e => setKeyInput(e.target.value)}
+                placeholder="sk-ant-api03-..."
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button
+                onClick={() => setShowKey(s => !s)}
+                style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", color:"#6a6458", fontSize:14 }}>
+                {showKey ? "🙈" : "👁️"}
+              </button>
+            </div>
+            <Btn onClick={() => onSaveApiKey(keyInput)}>Salvar</Btn>
+          </div>
+          <div style={{ color:"#4a4438", fontSize:10, fontFamily:"IBM Plex Mono,monospace", marginTop:6 }}>
+            🔒 A chave é salva apenas neste navegador (localStorage). Nunca sai do seu dispositivo.
+          </div>
+        </div>
+
+        {/* ── Taxa CDI ── */}
+        <div style={P.setCard}>
+          <div style={P.setTitle}>Taxa CDI</div>
+          <div style={{ display:"flex", gap:16, background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:10, padding:16 }}>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:28, fontWeight:800, color:"#e2c97e", fontFamily:"IBM Plex Mono,monospace" }}>{fmtP(settings.cdiRate)}</div>
+              <div style={{ fontSize:10, color:"#6a6458", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", marginTop:4 }}>CDI atual a.a. · {CDI_REF}</div>
+            </div>
+            <div style={{ background:"#13120f", border:"1px solid #1e1c16", borderRadius:8, padding:"10px 14px", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minWidth:90 }}>
+              <span style={{ fontSize:20 }}>📡</span>
+              <span style={{ fontSize:9, color:"#5a5448", fontFamily:"IBM Plex Mono,monospace", marginTop:4 }}>Claude</span>
             </div>
           </div>
+          <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"9px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginTop:10, lineHeight:1.6 }}>
+            ℹ️ Sandbox do Claude.ai bloqueia chamadas externas. Taxa atualizada manualmente a cada versão.
+          </div>
+          <label style={P.label}>Ajuste manual (% a.a.)</label>
+          <div style={{ display:"flex", gap:10 }}>
+            <input style={{ ...P.input, flex:1 }} type="number" step="0.01" value={form.cdiRate} onChange={e => setForm(f => ({ ...f, cdiRate: parseFloat(e.target.value)||0 }))} />
+            <Btn onClick={() => onSave(form)}>Salvar</Btn>
+          </div>
+        </div>
+
+        <div style={P.setCard}>
+          <div style={P.setTitle}>🌍 Câmbio USD / EUR</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:10 }}>
+            {[["USD","🇺🇸","#60a5fa"],["EUR","🇪🇺","#a78bfa"]].map(([cur, flag, color]) => (
+              <div key={cur} style={{ background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, padding:"12px 14px" }}>
+                <div style={{ fontSize:10, color:"#6a6458", fontFamily:"IBM Plex Mono,monospace", marginBottom:4 }}>{flag} {cur} / BRL</div>
+                <div style={{ fontSize:22, fontWeight:800, color, fontFamily:"IBM Plex Mono,monospace" }}>R${form.fx[cur]?.toFixed(2)}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div>
+              <label style={P.label}>USD manual</label>
+              <input style={P.input} type="number" step="0.01" value={form.fx.USD} onChange={e => setForm(f => ({ ...f, fx:{ ...f.fx, USD:parseFloat(e.target.value)||f.fx.USD } }))} />
+            </div>
+            <div>
+              <label style={P.label}>EUR manual</label>
+              <input style={P.input} type="number" step="0.01" value={form.fx.EUR} onChange={e => setForm(f => ({ ...f, fx:{ ...f.fx, EUR:parseFloat(e.target.value)||f.fx.EUR } }))} />
+            </div>
+          </div>
+          <div style={{ marginTop:12 }}>
+            <Btn onClick={() => onSave(form)}>Salvar Câmbio</Btn>
+          </div>
+        </div>
+
+        <div style={P.setCard}>
+          <div style={P.setTitle}>🎯 Meta de Patrimônio</div>
+          <label style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, cursor:"pointer" }}>
+            <input type="checkbox" checked={form.meta?.ativa ?? false}
+              onChange={e => setForm(f => ({ ...f, meta:{ ...f.meta, ativa:e.target.checked } }))}
+              style={{ width:16, height:16, accentColor:"#b77ee2" }} />
+            <span style={{ color:"#c9bfaa", fontSize:13 }}>Ativar meta de patrimônio</span>
+          </label>
+          {form.meta?.ativa && (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div>
+                <label style={P.label}>Valor meta (R$)</label>
+                <input style={P.input} type="number" value={form.meta.valor} onChange={e => setForm(f => ({ ...f, meta:{ ...f.meta, valor:parseFloat(e.target.value)||0 } }))} />
+              </div>
+              <div>
+                <label style={P.label}>Prazo (meses)</label>
+                <input style={P.input} type="number" value={form.meta.prazo} onChange={e => setForm(f => ({ ...f, meta:{ ...f.meta, prazo:parseInt(e.target.value)||0 } }))} />
+              </div>
+            </div>
+          )}
+          <div style={{ marginTop:12 }}><Btn onClick={() => onSave(form)}>Salvar Meta</Btn></div>
+        </div>
+
+        <div style={P.setCard}>
+          <div style={P.setTitle}>Tabela IR Regressiva</div>
+          {[["Até 180 dias","22,5%","Curto prazo"],["181–360 dias","20,0%","Médio prazo"],["361–720 dias","17,5%","Longo prazo"],["Acima de 720 dias","15,0%","Muito longo prazo"]].map(([l, a, d]) => (
+            <div key={l} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom:"1px solid #191714" }}>
+              <div>
+                <div style={{ color:"#c9bfaa", fontSize:13 }}>{l}</div>
+                <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace" }}>{d}</div>
+              </div>
+              <span style={{ color:"#e27e9a", fontWeight:700, fontFamily:"IBM Plex Mono,monospace" }}>{a}</span>
+            </div>
+          ))}
+          <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginTop:8, fontStyle:"italic" }}>* LCI/LCA e Bolsa são isentos de IR.</div>
+        </div>
+
+        {/* Versions / Snapshots */}
+        <div style={P.setCard}>
+          <div style={P.setTitle}>🕐 Versões Anteriores</div>
+          {(!snaps || snaps.length === 0) ? (
+            <div style={{ color:"#4a4438", fontSize:12, fontFamily:"IBM Plex Mono,monospace" }}>
+              Nenhuma versão salva ainda. As versões são criadas automaticamente a cada alteração.
+            </div>
+          ) : (
+            <>
+              <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginBottom:12 }}>
+                {snaps.length} versão{snaps.length!==1?"ões":""} salva{snaps.length!==1?"s":""}. Limite: {MAX_SNAPS}.
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {snaps.map((snap, i) => {
+                  const d    = new Date(snap.ts);
+                  const date = d.toLocaleDateString("pt-BR");
+                  const time = d.toLocaleTimeString("pt-BR", { hour:"2-digit", minute:"2-digit" });
+                  return (
+                    <div key={snap.ts} style={{ display:"flex", alignItems:"center", gap:12, background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, padding:"10px 14px" }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ color:"#c9bfaa", fontSize:13, fontWeight:600 }}>{date} às {time}</div>
+                        <div style={{ color:"#5a5448", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginTop:2 }}>{snap.label}{i === 0 ? " · versão anterior" : ""}</div>
+                      </div>
+                      <SnapRestoreBtn snap={snap} onRestore={onRestore} />
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ color:"#4a4438", fontSize:10, fontFamily:"IBM Plex Mono,monospace", marginTop:10, fontStyle:"italic" }}>
+                Ao restaurar, a versão atual é automaticamente salva como backup.
+              </div>
+            </>
+          )}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MINHA RENDA
+// ═══════════════════════════════════════════════════════════════════════════════
+function ScreenRenda({ renda, isMobile, onSave }) {
+  const hoje = new Date();
+  const [mesIdx, setMesIdx] = useState(hoje.getMonth());
+  const [editReceita, setEditReceita] = useState(false);
+  const [addCat, setAddCat] = useState(false);
+  const [newCatNome, setNewCatNome] = useState("");
+
+  const mesData = renda[mesIdx] || defRendaMes();
+  const cats = mesData.gastos || DEF_RENDA_CATS.map(c => ({ catId:c.id, previsto:DEF_RENDA_GASTOS_PREV[c.id]||0, real:0 }));
+
+  const totalReceita = (mesData.receitas?.salario||0) + (mesData.receitas?.freelance||0) + (mesData.receitas?.outros||0);
+  const totalPrevisto = cats.reduce((a,g) => a + (g.previsto||0), 0);
+  const totalReal     = cats.reduce((a,g) => a + (g.real||0), 0);
+  const saldo         = totalReceita - totalReal;
+  const comprometido  = totalReceita > 0 ? (totalReal / totalReceita * 100) : 0;
+
+  function updateReceita(field, val) {
+    const newRec = { ...mesData.receitas, [field]: parseFloat(val)||0 };
+    onSave(mesIdx, { ...mesData, receitas: newRec });
+  }
+
+  function updateGasto(catId, field, val) {
+    const newGastos = cats.map(g => g.catId === catId ? { ...g, [field]: parseFloat(val)||0 } : g);
+    onSave(mesIdx, { ...mesData, gastos: newGastos });
+  }
+
+  function addNewCat() {
+    if (!newCatNome.trim()) return;
+    const newId = Date.now();
+    DEF_RENDA_CATS.push({ id: newId, nome: newCatNome.trim(), icone: "📦" });
+    const newGastos = [...cats, { catId: newId, previsto:0, real:0 }];
+    onSave(mesIdx, { ...mesData, gastos: newGastos });
+    setNewCatNome(""); setAddCat(false);
+  }
+
+  function removeCat(catId) {
+    const newGastos = cats.filter(g => g.catId !== catId);
+    onSave(mesIdx, { ...mesData, gastos: newGastos });
+  }
+
+  // Chart data — top 8 by real value
+  const chartData = cats
+    .map(g => { const c = DEF_RENDA_CATS.find(x => x.id === g.catId); return { nome: c?.nome||"?", real: g.real||0, previsto: g.previsto||0 }; })
+    .filter(x => x.real > 0 || x.previsto > 0)
+    .sort((a,b) => b.real - a.real)
+    .slice(0, 8);
+
+  const saldoOk = saldo >= 0;
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Minha Renda" subtitle="Controle financeiro mensal — ganhos e gastos" />
+
+      {/* Month tabs */}
+      <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:24 }}>
+        {MESES.map((m, i) => (
+          <button key={i} onClick={() => setMesIdx(i)}
+            style={{ padding:"6px 14px", borderRadius:20, border:"1px solid", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", cursor:"pointer", fontWeight: mesIdx===i?700:400,
+              background: mesIdx===i?"#F5C518":"#111",
+              color:      mesIdx===i?"#000":"#666",
+              borderColor:mesIdx===i?"#F5C518":"#2a2a2a" }}>
+            {m.substring(0,3)}
+          </button>
+        ))}
+      </div>
+
+      {/* KPI cards */}
+      <div style={P.kpiRow} className="kpi-row">
+        <KPI label="Total Receitas"   value={fmt(totalReceita)}              color="#F5C518" icon="💰" />
+        <KPI label="Total Gastos"     value={fmt(totalReal)}                 color={totalReal > totalPrevisto ? "#ff6666" : "#ffffff"} icon="💸" />
+        <KPI label="Saldo do Mês"     value={fmt(saldo)}                     color={saldoOk ? "#00cc66" : "#ff6666"} icon={saldoOk?"✅":"⚠️"} />
+        <KPI label="Comprometido"     value={`${comprometido.toFixed(1)}%`}  color={comprometido > 90 ? "#ff6666" : comprometido > 70 ? "#F5C518" : "#00cc66"} icon="📊" />
+      </div>
+
+      {/* Saldo bar */}
+      <div style={{ ...P.chartCard, marginBottom:20 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <span style={{ fontSize:11, color:"#555", fontFamily:"'IBM Plex Mono',monospace", textTransform:"uppercase", letterSpacing:1.2 }}>
+            Gastos vs Receita — {MESES[mesIdx]}
+          </span>
+          <span style={{ fontSize:12, color: saldoOk?"#00cc66":"#ff6666", fontFamily:"'IBM Plex Mono',monospace", fontWeight:700 }}>
+            {saldoOk ? `Sobram ${fmt(saldo)}` : `Déficit ${fmt(Math.abs(saldo))}`}
+          </span>
+        </div>
+        <div style={{ height:10, background:"#1a1a1a", borderRadius:5, overflow:"hidden" }}>
+          <div style={{ height:10, borderRadius:5, width:`${Math.min(100,comprometido)}%`, transition:"width .5s",
+            background: comprometido>100?"#ff6666":comprometido>80?"#F5C518":"#00cc66" }} />
+        </div>
+        <div style={{ display:"flex", justifyContent:"space-between", marginTop:5, fontSize:10, color:"#555", fontFamily:"'IBM Plex Mono',monospace" }}>
+          <span>R$ 0</span>
+          <span>Meta: 80% ({fmt(totalReceita*0.8)})</span>
+          <span>{fmt(totalReceita)}</span>
+        </div>
+      </div>
+
+      <div style={{ ...P.grid2, gridTemplateColumns:isMobile?"1fr":"1fr 1fr" }}>
+        {/* Receitas */}
+        <div style={P.chartCard}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+            <div style={P.chartTitle}>💰 Receitas</div>
+            <button style={{ ...P.iBtn, fontSize:11 }} onClick={() => setEditReceita(e => !e)}>
+              {editReceita ? "✓ Fechar" : "✏️ Editar"}
+            </button>
+          </div>
+          {[
+            { key:"salario",   label:"Salário",            icon:"👔" },
+            { key:"freelance", label:"Freelance / Extra",  icon:"💡" },
+            { key:"outros",    label:"Outros",             icon:"📦" },
+          ].map(({ key, label, icon }) => (
+            <div key={key} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 0", borderBottom:"1px solid #1a1a1a" }}>
+              <span style={{ fontSize:18, width:28 }}>{icon}</span>
+              <span style={{ flex:1, color:"#ccc", fontSize:13 }}>{label}</span>
+              {editReceita
+                ? <input type="number" defaultValue={mesData.receitas?.[key]||0}
+                    onBlur={e => updateReceita(key, e.target.value)}
+                    style={{ ...P.input, width:120, textAlign:"right", fontSize:13 }} />
+                : <span style={{ color:"#F5C518", fontWeight:700, fontFamily:"'IBM Plex Mono',monospace", fontSize:14 }}>{fmt(mesData.receitas?.[key]||0)}</span>
+              }
+            </div>
+          ))}
+          <div style={{ display:"flex", justifyContent:"space-between", marginTop:12, padding:"10px 0" }}>
+            <span style={{ color:"#555", fontSize:12, textTransform:"uppercase", letterSpacing:1, fontFamily:"'IBM Plex Mono',monospace" }}>TOTAL</span>
+            <span style={{ color:"#F5C518", fontWeight:800, fontFamily:"'IBM Plex Mono',monospace", fontSize:16 }}>{fmt(totalReceita)}</span>
+          </div>
+        </div>
+
+        {/* Gastos chart */}
+        <div style={P.chartCard}>
+          <div style={P.chartTitle}>📊 Gastos por Categoria</div>
+          {chartData.length === 0
+            ? <Muted>Nenhum gasto lançado ainda.</Muted>
+            : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={chartData} layout="vertical" margin={{ top:0, right:8, left:0, bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" horizontal={false} />
+                  <XAxis type="number" tickFormatter={v => `R$${(v/1000).toFixed(1)}k`} tick={{ fill:"#555", fontSize:10 }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="nome" tick={{ fill:"#aaa", fontSize:10, fontFamily:"'IBM Plex Mono',monospace" }} axisLine={false} tickLine={false} width={100} />
+                  <Tooltip formatter={v => fmt(v)} contentStyle={{ background:"#111", border:"1px solid #222", borderRadius:8, fontFamily:"'IBM Plex Mono',monospace", fontSize:11 }} />
+                  <Legend wrapperStyle={{ fontFamily:"'IBM Plex Mono',monospace", fontSize:10, color:"#555" }} iconType="square" iconSize={7} />
+                  <Bar dataKey="previsto" name="Previsto" fill="#333"    radius={[0,3,3,0]} />
+                  <Bar dataKey="real"     name="Real"     fill="#F5C518" radius={[0,3,3,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )
+          }
+        </div>
+      </div>
+
+      {/* Gastos table */}
+      <div style={{ ...P.chartCard, marginTop:4 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
+          <div style={P.chartTitle}>💸 Lançamento de Gastos — {MESES[mesIdx]}</div>
+          <div style={{ display:"flex", gap:8 }}>
+            <span style={{ color:"#555", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", alignSelf:"center" }}>
+              Previsto: <strong style={{ color:"#aaa" }}>{fmt(totalPrevisto)}</strong>
+              {" · "}Real: <strong style={{ color: totalReal>totalPrevisto?"#ff6666":"#00cc66" }}>{fmt(totalReal)}</strong>
+            </span>
+            <button style={{ ...P.btnSec, fontSize:11, padding:"6px 12px" }} onClick={() => setAddCat(true)}>+ Categoria</button>
+          </div>
+        </div>
+
+        {addCat && (
+          <div style={{ display:"flex", gap:8, marginBottom:14, padding:12, background:"#0a0a0a", borderRadius:8, border:"1px solid #2a2a2a" }}>
+            <input style={{ ...P.input, flex:1 }} placeholder="Nome da categoria" value={newCatNome} onChange={e => setNewCatNome(e.target.value)} onKeyDown={e => e.key==="Enter" && addNewCat()} autoFocus />
+            <Btn onClick={addNewCat}>Adicionar</Btn>
+            <BtnCancel onClick={() => setAddCat(false)}>Cancelar</BtnCancel>
+          </div>
         )}
+
+        <div style={{ overflowX:"auto" }}>
+          <table style={P.table}>
+            <thead><tr>
+              <th style={P.th}>Categoria</th>
+              <th style={{ ...P.th, textAlign:"right" }}>Previsto</th>
+              <th style={{ ...P.th, textAlign:"right" }}>Real</th>
+              <th style={{ ...P.th, textAlign:"right" }}>Diferença</th>
+              <th style={{ ...P.th, textAlign:"right" }}>% Total</th>
+              <th style={P.th}></th>
+            </tr></thead>
+            <tbody>
+              {cats.map(g => {
+                const cat = DEF_RENDA_CATS.find(c => c.id === g.catId);
+                if (!cat) return null;
+                const diff = (g.real||0) - (g.previsto||0);
+                const pct  = totalReal > 0 ? (g.real||0) / totalReal * 100 : 0;
+                const acima = diff > 0;
+                return (
+                  <tr key={g.catId} style={P.tr}>
+                    <td style={{ ...P.td, color:"#fff" }}>{cat.icone} {cat.nome}</td>
+                    <td style={{ ...P.td, textAlign:"right" }}>
+                      <input type="number" value={g.previsto||0}
+                        onChange={e => updateGasto(g.catId, "previsto", e.target.value)}
+                        style={{ background:"transparent", border:"none", borderBottom:"1px solid #2a2a2a", color:"#777", fontFamily:"'IBM Plex Mono',monospace", fontSize:12, textAlign:"right", width:90, outline:"none" }} />
+                    </td>
+                    <td style={{ ...P.td, textAlign:"right" }}>
+                      <input type="number" value={g.real||0}
+                        onChange={e => updateGasto(g.catId, "real", e.target.value)}
+                        style={{ background:"transparent", border:"none", borderBottom:"1px solid #F5C518", color:"#fff", fontFamily:"'IBM Plex Mono',monospace", fontSize:12, textAlign:"right", width:90, outline:"none", fontWeight:600 }} />
+                    </td>
+                    <td style={{ ...P.td, textAlign:"right", color: acima?"#ff6666":"#00cc66", fontWeight:600 }}>
+                      {diff !== 0 ? (acima ? `+${fmt(diff)}` : fmt(diff)) : "—"}
+                    </td>
+                    <td style={{ ...P.td, textAlign:"right", color:"#555" }}>{pct.toFixed(1)}%</td>
+                    <td style={P.td}>
+                      <button style={{ ...P.iBtn, fontSize:11 }} onClick={() => removeCat(g.catId)} title="Remover">✕</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop:"2px solid #333" }}>
+                <td style={{ ...P.td, color:"#fff", fontWeight:700 }}>TOTAL</td>
+                <td style={{ ...P.td, textAlign:"right", color:"#aaa", fontWeight:700 }}>{fmt(totalPrevisto)}</td>
+                <td style={{ ...P.td, textAlign:"right", color:"#F5C518", fontWeight:800, fontSize:14 }}>{fmt(totalReal)}</td>
+                <td style={{ ...P.td, textAlign:"right", color: totalReal>totalPrevisto?"#ff6666":"#00cc66", fontWeight:700 }}>
+                  {fmt(totalReal - totalPrevisto)}
+                </td>
+                <td style={{ ...P.td, textAlign:"right", color:"#555" }}>100%</td>
+                <td style={P.td}></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <p style={P.note}>Clique nos valores de Previsto ou Real para editar diretamente na tabela.</p>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COTAÇÕES
+// ═══════════════════════════════════════════════════════════════════════════════
+function ScreenCotacoes({ quotes, isMobile, onFetch, onUpdateWatchlist, qLoading, settings }) {
+  const [editSection, setEditSection] = useState(null);
+  const [editInput,   setEditInput]   = useState("");
+
+  const wl   = quotes?.watchlist  || DEF_WATCHLIST;
+  const data = quotes?.data       || { currencies:{}, br:{}, us:{}, crypto:{} };
+
+  const SECTIONS = [
+    { key:"currencies", label:"💵 Moedas",       unit:"BRL", color:"#e2c97e", hint:"USD, EUR, GBP..." },
+    { key:"br",         label:"📈 Ações BR",     unit:"BRL", color:"#7ecfb3", hint:"PETR4, VALE3..." },
+    { key:"us",         label:"🇺🇸 Ações EUA",   unit:"USD", color:"#60a5fa", hint:"AAPL, MSFT..."   },
+    { key:"crypto",     label:"₿ Crypto",        unit:"USD", color:"#f7931a", hint:"BTC, ETH..."     },
+  ];
+
+  function startEdit(key) {
+    setEditSection(key);
+    setEditInput((wl[key] || []).join(", "));
+  }
+
+  function saveEdit(key) {
+    const tickers = editInput.split(/[,\s]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
+    onUpdateWatchlist(key, tickers);
+    setEditSection(null);
+  }
+
+  function fmtQuote(val) {
+    if (val === null || val === undefined) return "—";
+    if (val >= 1000) return val.toLocaleString("pt-BR", { maximumFractionDigits:0 });
+    return val.toLocaleString("pt-BR", { minimumFractionDigits:2, maximumFractionDigits:2 });
+  }
+
+  function changePctColor(pct) {
+    if (!pct && pct !== 0) return "#6a6458";
+    return pct >= 0 ? "#7ecfb3" : "#e27e9a";
+  }
+
+  function changePctStr(pct) {
+    if (!pct && pct !== 0) return "—";
+    return (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
+  }
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Cotações" subtitle="Estimativas via Claude — sincroniza USD/EUR com o portfólio">
+        <Btn onClick={() => onFetch(wl)} disabled={qLoading}>
+          {qLoading ? "⟳ Buscando..." : "↻ Atualizar tudo"}
+        </Btn>
+      </PageHeader>
+
+      {quotes?.updatedAt && (
+        <div style={{ fontSize:11, color:"#555", fontFamily:"'IBM Plex Mono',monospace", marginBottom:20 }}>
+          Última atualização: {quotes.updatedAt}
+        </div>
+      )}
+
+      {quotes?.data?.cdi && (
+        <div style={{ background:"#111", border:"1px solid #F5C51844", borderRadius:14, padding:"16px 20px", marginBottom:20, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
+          <div style={{ fontSize:32 }}>📡</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:10, color:"#555", textTransform:"uppercase", letterSpacing:1.5, fontFamily:"'IBM Plex Mono',monospace", marginBottom:4 }}>Taxa CDI — atualizada automaticamente</div>
+            <div style={{ fontSize:28, fontWeight:800, color:"#F5C518", fontFamily:"'IBM Plex Mono',monospace", letterSpacing:-1 }}>
+              {fmtP(quotes.data.cdi)}
+              <span style={{ fontSize:13, color:"#555", marginLeft:8, fontWeight:400 }}>ao ano</span>
+            </div>
+          </div>
+          <div style={{ background:"#001a00", border:"1px solid #00cc6633", borderRadius:8, padding:"6px 14px", fontSize:11, color:"#00cc66", fontFamily:"'IBM Plex Mono',monospace" }}>
+            ✓ Sincronizado com o portfólio
+          </div>
+        </div>
+      )}
+
+      {quotes?.error && (
+        <div style={{ background:"#1a0000", border:"1px solid #cc000044", borderRadius:10, padding:"14px 16px", marginBottom:20, fontSize:11, color:"#ff6666", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.8 }}>
+          <strong>✗ Erro na última busca:</strong><br/>
+          {quotes.error}<br/>
+          <span style={{ color:"#555" }}>Tente novamente ou verifique sua conexão com a internet.</span>
+        </div>
+      )}
+
+      {!quotes?.updatedAt && !quotes?.error && (
+        <div style={{ background:"#111", border:"1px solid #333", borderRadius:10, padding:"14px 18px", marginBottom:20, fontSize:12, color:"#888", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.7 }}>
+          ℹ️ Clique em <strong style={{ color:"#F5C518" }}>↻ Atualizar tudo</strong> para buscar cotações e taxa CDI via Claude.<br/>
+          <span style={{ color:"#555" }}>Necessário configurar a chave de API em Configurações.</span>
+        </div>
+      )}
+
+      <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:20 }}>
+        {SECTIONS.map(sec => {
+          const tickers   = wl[sec.key] || [];
+          const secData   = data[sec.key] || {};
+          const isEditing = editSection === sec.key;
+
+          return (
+            <div key={sec.key} style={{ ...P.chartCard, borderColor:sec.color+"33" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ ...P.chartTitle, color:sec.color, marginBottom:0 }}>{sec.label}</div>
+                <button style={{ ...P.iBtn, fontSize:11, padding:"3px 10px" }} onClick={() => isEditing ? saveEdit(sec.key) : startEdit(sec.key)}>
+                  {isEditing ? "✓ Salvar" : "✏️ Editar"}
+                </button>
+              </div>
+
+              {isEditing ? (
+                <div>
+                  <div style={{ fontSize:11, color:"#6a6458", fontFamily:"IBM Plex Mono,monospace", marginBottom:6 }}>
+                    Tickers separados por vírgula ({sec.hint})
+                  </div>
+                  <input
+                    style={{ ...P.input, marginBottom:8 }}
+                    value={editInput}
+                    onChange={e => setEditInput(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && saveEdit(sec.key)}
+                    placeholder={sec.hint}
+                    autoFocus
+                  />
+                  <div style={{ display:"flex", gap:8 }}>
+                    <Btn onClick={() => saveEdit(sec.key)}>Salvar</Btn>
+                    <BtnCancel onClick={() => setEditSection(null)}>Cancelar</BtnCancel>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  {tickers.length === 0 ? (
+                    <div style={{ color:"#4a4438", fontSize:12, fontFamily:"IBM Plex Mono,monospace", padding:"8px 0" }}>
+                      Nenhum ticker. Clique em ✏️ Editar para adicionar.
+                    </div>
+                  ) : (
+                    <div>
+                      {/* Header row */}
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr auto auto auto", gap:8, paddingBottom:8, borderBottom:"1px solid #1e1c16", marginBottom:4 }}>
+                        <span style={{ fontSize:10, color:"#5a5448", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", letterSpacing:.8 }}>Ativo</span>
+                        <span style={{ fontSize:10, color:"#5a5448", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", letterSpacing:.8, textAlign:"right" }}>Preço</span>
+                        <span style={{ fontSize:10, color:"#5a5448", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", letterSpacing:.8, textAlign:"right" }}>Var.</span>
+                        <span style={{ fontSize:10, color:"#5a5448", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", letterSpacing:.8, textAlign:"right" }}>%</span>
+                      </div>
+                      {tickers.map(ticker => {
+                        const q = secData[ticker];
+                        const hasData = q && q.price !== null && q.price !== undefined;
+                        const pctColor = changePctColor(q?.changePct);
+                        return (
+                          <div key={ticker} style={{ display:"grid", gridTemplateColumns:"1fr auto auto auto", gap:8, padding:"8px 0", borderBottom:"1px solid #191714", alignItems:"center" }}>
+                            <div>
+                              <span style={{ color:"#d4cfc5", fontWeight:700, fontFamily:"IBM Plex Mono,monospace", fontSize:13 }}>{ticker}</span>
+                              <span style={{ marginLeft:6, fontSize:10, color:"#5a5448", fontFamily:"IBM Plex Mono,monospace" }}>{sec.unit}</span>
+                            </div>
+                            <span style={{ color: hasData ? sec.color : "#4a4438", fontWeight:700, fontFamily:"IBM Plex Mono,monospace", fontSize:13, textAlign:"right" }}>
+                              {hasData ? fmtQuote(q.price) : (qLoading ? "..." : "—")}
+                            </span>
+                            <span style={{ color: pctColor, fontFamily:"IBM Plex Mono,monospace", fontSize:11, textAlign:"right" }}>
+                              {hasData ? fmtQuote(q.change) : "—"}
+                            </span>
+                            <span style={{ color: pctColor, fontWeight:600, fontFamily:"IBM Plex Mono,monospace", fontSize:11, textAlign:"right", minWidth:52 }}>
+                              {hasData ? changePctStr(q.changePct) : "—"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Portfolio sync note for currencies */}
+              {sec.key === "currencies" && (data.currencies?.USD?.price || data.currencies?.EUR?.price) && (
+                <div style={{ marginTop:10, padding:"8px 10px", background:"#081f12", border:"1px solid #7ecfb344", borderRadius:6, fontSize:10, color:"#7ecfb3", fontFamily:"IBM Plex Mono,monospace" }}>
+                  ✓ USD e EUR sincronizados com o portfólio automaticamente.
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODALS
+// ═══════════════════════════════════════════════════════════════════════════════
+function InvModal({ data, cats, isMobile, onSave, onClose }) {
+  const [form, setForm] = useState({
+    id:          data.id,
+    nome:        data.nome || "",
+    tipo:        data.tipo || "cdb",
+    valor:       data.valor ? String(data.valor) : "",
+    pct:         data.pct  ? String(data.pct)   : "",
+    data:        data.data || new Date().toISOString().split("T")[0],
+    vencimento:  data.vencimento || "",
+    categoriaId: data.categoriaId || null,
+  });
+
+  const t = getType(form.tipo);
+
+  return (
+    <Overlay onClose={onClose} isMobile={isMobile}>
+      <ModalBox isMobile={isMobile} maxW={500}>
+        <div style={M.title}>{data.id ? "Editar" : "Novo"} Investimento</div>
+
+        <label style={P.label}>Tipo</label>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:6, marginBottom:4 }}>
+          {TYPES.map(tp => (
+            <button key={tp.id} onClick={() => setForm(f => ({ ...f, tipo:tp.id }))}
+              style={{ ...M.typeBtn, ...(form.tipo===tp.id ? { borderColor:tp.color, color:tp.color, background:tp.color+"18" } : {}) }}>
+              <span style={{ fontSize:14 }}>{tp.icon}</span>
+              <span style={{ fontSize:9 }}>{tp.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {t.intl && (
+          <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"8px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginBottom:4 }}>
+            🌍 Ativo em {t.currency}. Convertido para BRL via câmbio configurado.
+          </div>
+        )}
+
+        <label style={P.label}>Nome</label>
+        <input style={P.input} value={form.nome} onChange={e => setForm(f => ({ ...f, nome:e.target.value }))} placeholder={`Ex: ${t.label} XP`} />
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div>
+            <label style={P.label}>Valor {t.currency ? `(${t.currency})` : "(R$)"}</label>
+            <input style={P.input} type="number" value={form.valor} onChange={e => setForm(f => ({ ...f, valor:e.target.value }))} placeholder="10000" />
+          </div>
+          <div>
+            <label style={P.label}>{t.intl ? "Retorno a.a. (%)" : "% CDI"}</label>
+            <input style={P.input} type="number" value={form.pct} onChange={e => setForm(f => ({ ...f, pct:e.target.value }))} placeholder={t.intl ? "12" : "100"} />
+          </div>
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div>
+            <label style={P.label}>Data de Início</label>
+            <input style={{ ...P.input, colorScheme:"dark" }} type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data:e.target.value }))} />
+          </div>
+          <div>
+            <label style={P.label}>Vencimento (opcional)</label>
+            <input style={{ ...P.input, colorScheme:"dark" }} type="date" value={form.vencimento} onChange={e => setForm(f => ({ ...f, vencimento:e.target.value }))} />
+          </div>
+        </div>
+
+        {cats.length > 0 && (
+          <>
+            <label style={P.label}>Categoria (opcional)</label>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:8 }}>
+              <button style={{ ...M.catChip, ...(form.categoriaId===null ? M.catChipActive : {}) }} onClick={() => setForm(f => ({ ...f, categoriaId:null }))}>Nenhuma</button>
+              {cats.map(cat => (
+                <button key={cat.id} onClick={() => setForm(f => ({ ...f, categoriaId:cat.id }))}
+                  style={{ ...M.catChip, ...(form.categoriaId===cat.id ? { borderColor:cat.cor, color:cat.cor, background:cat.cor+"18" } : {}) }}>
+                  {cat.nome}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {t.ir
+          ? <div style={M.irNote}>⚠️ {t.label} tem IR regressivo (22,5% → 15%)</div>
+          : <div style={{ ...M.irNote, borderColor:"#7ecfb344", color:"#7ecfb3", background:"#7ecfb308" }}>✓ {t.label} é isento de IR</div>
+        }
+
+        <div style={M.actions}>
+          <BtnCancel onClick={onClose}>Cancelar</BtnCancel>
+          <Btn onClick={() => onSave(form)}>Salvar</Btn>
+        </div>
+      </ModalBox>
+    </Overlay>
+  );
+}
+
+function DepModal({ data, invs, isMobile, onSave, onClose }) {
+  const [form, setForm] = useState({
+    invId: data.invId || invs[0]?.id || null,
+    valor: "",
+    data:  new Date().toISOString().split("T")[0],
+    obs:   "",
+  });
+  return (
+    <Overlay onClose={onClose} isMobile={isMobile}>
+      <ModalBox isMobile={isMobile} maxW={400}>
+        <div style={M.title}>💰 Registrar Aporte</div>
+        <label style={P.label}>Investimento</label>
+        <select style={{ ...P.input, cursor:"pointer" }} value={form.invId || ""} onChange={e => setForm(f => ({ ...f, invId:parseInt(e.target.value) }))}>
+          {invs.map(inv => { const t = getType(inv.tipo); return <option key={inv.id} value={inv.id}>{t.icon} {inv.nome}</option>; })}
+        </select>
+        <label style={P.label}>Valor (R$)</label>
+        <input style={P.input} type="number" value={form.valor} onChange={e => setForm(f => ({ ...f, valor:e.target.value }))} placeholder="1000" />
+        <label style={P.label}>Data</label>
+        <input style={{ ...P.input, colorScheme:"dark" }} type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data:e.target.value }))} />
+        <label style={P.label}>Observação (opcional)</label>
+        <input style={P.input} value={form.obs} onChange={e => setForm(f => ({ ...f, obs:e.target.value }))} placeholder="Ex: Aporte mensal" />
+        <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"8px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginTop:6 }}>
+          💡 O valor será somado ao saldo do investimento.
+        </div>
+        <div style={M.actions}>
+          <BtnCancel onClick={onClose}>Cancelar</BtnCancel>
+          <Btn onClick={() => onSave(form)}>Registrar</Btn>
+        </div>
+      </ModalBox>
+    </Overlay>
+  );
+}
+
+function CatModal({ data, isMobile, onSave, onClose }) {
+  const [form, setForm] = useState({ id:data.id, nome:data.nome||"", cor:data.cor||"#7ecfb3" });
+  const COLORS = ["#e2c97e","#7ecfb3","#7eb8e2","#b77ee2","#e27e9a","#e2a07e","#f7931a","#9a9a9a"];
+  return (
+    <Overlay onClose={onClose} isMobile={isMobile}>
+      <ModalBox isMobile={isMobile} maxW={360}>
+        <div style={M.title}>{data.id ? "Editar" : "Nova"} Categoria</div>
+        <label style={P.label}>Nome</label>
+        <input style={P.input} value={form.nome} onChange={e => setForm(f => ({ ...f, nome:e.target.value }))} onKeyDown={e => e.key==="Enter" && onSave(form)} placeholder="Ex: Renda Fixa" />
+        <label style={P.label}>Cor</label>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+          {COLORS.map(c => (
+            <button key={c} onClick={() => setForm(f => ({ ...f, cor:c }))}
+              style={{ width:28, height:28, borderRadius:6, background:c, border:form.cor===c?"2px solid #fff":"2px solid transparent", cursor:"pointer" }} />
+          ))}
+        </div>
+        <div style={M.actions}>
+          <BtnCancel onClick={onClose}>Cancelar</BtnCancel>
+          <Btn onClick={() => onSave(form)}>Salvar</Btn>
+        </div>
+      </ModalBox>
+    </Overlay>
+  );
+}
+
+function ImportModal({ isMobile, onImport, onClose }) {
+  const [err,  setErr]  = useState(null);
+  const [drag, setDrag] = useState(false);
+  const ref = useRef(null);
+
+  function handle(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const data = parseImport(e.target.result, file.name.endsWith(".csv"));
+        onImport(data);
+      } catch (_) {
+        setErr("Arquivo inválido. Use JSON ou CSV exportado pelo InvestPro.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <Overlay onClose={onClose} isMobile={isMobile}>
+      <ModalBox isMobile={isMobile} maxW={420}>
+        <div style={M.title}>⬆ Importar Dados</div>
+        <div
+          style={{ border:`2px dashed ${drag?"#e2c97e":"#2a2820"}`, borderRadius:10, padding:"32px 24px", textAlign:"center", background:drag?"#1e1c10":"#0e0d0b", transition:"all .2s", cursor:"pointer", marginBottom:8 }}
+          onDragOver={e => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={e => { e.preventDefault(); setDrag(false); handle(e.dataTransfer.files[0]); }}>
+          <div style={{ fontSize:32, marginBottom:8 }}>📂</div>
+          <div style={{ color:"#c9bfaa", fontSize:13, marginBottom:4 }}>Arraste um arquivo aqui</div>
+          <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginBottom:16 }}>JSON ou CSV exportado pelo InvestPro</div>
+          <BtnCancel onClick={() => ref.current?.click()}>Selecionar arquivo</BtnCancel>
+          <input ref={ref} type="file" accept=".json,.csv" style={{ display:"none" }} onChange={e => handle(e.target.files[0])} />
+        </div>
+        {err && <div style={{ background:"#1f0808", border:"1px solid #e27e9a44", borderRadius:6, padding:"9px 12px", fontSize:11, color:"#e27e9a", fontFamily:"IBM Plex Mono,monospace" }}>✗ {err}</div>}
+        <div style={{ color:"#4a4438", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginTop:6 }}>⚠️ A importação substituirá todos os dados atuais.</div>
+        <div style={M.actions}><BtnCancel onClick={onClose}>Cancelar</BtnCancel></div>
+      </ModalBox>
+    </Overlay>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MICRO COMPONENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+function PageHeader({ title, subtitle, children }) {
+  return (
+    <div style={P.pageHeader}>
+      <div>
+        <h1 style={P.pageTitle} className="page-title">{title}</h1>
+        {subtitle && <p style={P.pageSub}>{subtitle}</p>}
+      </div>
+      {children && <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>{children}</div>}
+    </div>
+  );
+}
+
+function KPI({ label, value, color, icon }) {
+  return (
+    <div style={{ ...P.kpiCard, borderColor:color+"44" }} className="card-hover">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+        <div style={P.kpiLabel}>{label}</div>
+        <span style={{ color:color+"88", fontSize:18 }}>{icon}</span>
+      </div>
+      <div style={{ ...P.kpiValue, color }} className="kpi-value">{value}</div>
+    </div>
+  );
+}
+
+function ChartCard({ title, children }) {
+  return (
+    <div style={P.chartCard}>
+      <div style={P.chartTitle}>{title}</div>
+      {children}
+    </div>
+  );
+}
+
+function AlertRow({ name, sub, badge, badgeColor, urgent }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", padding:"10px 12px", marginBottom:8, background:"#0e0d0b", border:`1px solid ${urgent?"#e27e9a44":"#3a3020"}`, borderRadius:8 }}>
+      <div style={{ flex:1 }}>
+        <div style={{ color:"#d4cfc5", fontWeight:600, fontSize:13 }}>{name}</div>
+        <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginTop:2 }}>{sub}</div>
+      </div>
+      <div style={{ color:badgeColor, fontWeight:700, fontFamily:"IBM Plex Mono,monospace", fontSize:14, textAlign:"right" }}>{badge}</div>
+    </div>
+  );
+}
+
+function Met({ label, value, accent }) {
+  return (
+    <div style={P.metricBox}>
+      <div style={P.metricLabel}>{label}</div>
+      <div style={{ ...P.metricValue, ...(accent ? { color:accent } : {}) }}>{value}</div>
+    </div>
+  );
+}
+
+function Chip({ active, onClick, color, children }) {
+  const c = color || "#e2c97e";
+  return (
+    <button style={{ ...P.chip, ...(active ? { borderColor:c, color:c, background:c+"18" } : {}) }} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+function Toggle({ options, labels, value, onChange }) {
+  return (
+    <div style={{ display:"flex", gap:6 }}>
+      {options.map((opt, i) => (
+        <button key={opt} style={{ ...P.toggleBtn, ...(value===opt ? P.toggleActive : {}) }} onClick={() => onChange(opt)}>
+          {labels[i]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Btn({ onClick, children }) {
+  return <button style={P.btn} onClick={onClick} className="btn-hover">{children}</button>;
+}
+
+function BtnSec({ onClick, children }) {
+  return <button style={P.btnSec} onClick={onClick} className="btn-hover">{children}</button>;
+}
+
+function BtnCancel({ onClick, children }) {
+  return <button style={P.btnCancel} onClick={onClick}>{children}</button>;
+}
+
+function IBtn({ onClick, title, children }) {
+  return <button style={P.iBtn} onClick={onClick} title={title}>{children}</button>;
+}
+
+function Overlay({ onClose, children, isMobile }) {
+  return (
+    <div style={{ ...M.overlay, alignItems:isMobile?"flex-end":"center" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()}>{children}</div>
+    </div>
+  );
+}
+
+function ModalBox({ children, isMobile, maxW }) {
+  return (
+    <div style={{ ...M.box, maxWidth:isMobile?"100vw":maxW, width:isMobile?"100vw":"100%", borderRadius:isMobile?"16px 16px 0 0":14, paddingBottom:isMobile?32:28 }}>
+      {children}
+    </div>
+  );
+}
+
+function Empty({ children }) { return <div style={P.empty}>{children}</div>; }
+function Muted({ children }) { return <div style={{ color:"#4a4438", fontSize:12, fontFamily:"IBM Plex Mono,monospace", padding:"12px 0" }}>{children}</div>; }
+
+function SnapRestoreBtn({ snap, onRestore }) {
+  const [confirm, setConfirm] = useState(false);
+  if (confirm) {
+    return (
+      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+        <span style={{ fontSize:11, color:"#e2c97e", fontFamily:"IBM Plex Mono,monospace" }}>Confirmar?</span>
+        <button style={{ ...P.btn, padding:"5px 12px", fontSize:11 }} onClick={() => { onRestore(snap); setConfirm(false); }}>Sim</button>
+        <BtnCancel onClick={() => setConfirm(false)}>Não</BtnCancel>
       </div>
     );
   }
-  // ... (Estilos e Render)
-</script>
+  return (
+    <button style={{ ...P.btnSec, padding:"6px 14px", fontSize:11 }} onClick={() => setConfirm(true)}>
+      ↩ Restaurar
+    </button>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STYLES
+// ═══════════════════════════════════════════════════════════════════════════════
+const S = {
+  app:        { display:"flex", minHeight:"100vh", background:"#0a0a0a", fontFamily:"'Inter',sans-serif", color:"#ffffff" },
+  sidebar:    { position:"fixed", top:0, left:0, height:"100vh", background:"#111111", borderRight:"1px solid #222222", display:"flex", flexDirection:"column", zIndex:100, transition:"width .28s cubic-bezier(.4,0,.2,1)", overflow:"hidden" },
+  sidebarLogo:{ display:"flex", alignItems:"center", gap:12, padding:"20px 14px 16px", borderBottom:"1px solid #222", flexShrink:0, cursor:"pointer", userSelect:"none" },
+  logoIcon:   { fontSize:26, flexShrink:0, lineHeight:1 },
+  logoText:   { fontSize:17, fontWeight:800, color:"#ffffff", letterSpacing:-.5, whiteSpace:"nowrap" },
+  sidebarSum: { padding:"14px 16px", borderBottom:"1px solid #1a1a1a", flexShrink:0 },
+  sl:         { fontSize:9, color:"#555", textTransform:"uppercase", letterSpacing:1.5, fontFamily:"'IBM Plex Mono',monospace" },
+  sv:         { fontSize:13, fontWeight:700, fontFamily:"'IBM Plex Mono',monospace", marginTop:3, whiteSpace:"nowrap" },
+  nav:        { flex:1, padding:"10px 8px", display:"flex", flexDirection:"column", gap:3, overflowY:"auto" },
+  navItem:    { display:"flex", alignItems:"center", gap:12, padding:"10px 12px", borderRadius:10, background:"transparent", border:"none", color:"#666", cursor:"pointer", transition:"all .15s", fontSize:13, fontFamily:"'Inter',sans-serif", fontWeight:500, width:"100%", whiteSpace:"nowrap" },
+  navActive:  { background:"#F5C518", color:"#000000", fontWeight:700 },
+  navIcon:    { fontSize:16, flexShrink:0, width:20, textAlign:"center" },
+  navLabel:   { fontSize:13 },
+  sideTypes:  { padding:"10px 16px", borderTop:"1px solid #1a1a1a", flexShrink:0 },
+  typeRow:    { display:"flex", alignItems:"center", gap:8, marginTop:6 },
+  typeDot:    { width:7, height:7, borderRadius:2, flexShrink:0 },
+  typeLabel:  { flex:1, fontSize:11, color:"#555", fontFamily:"'IBM Plex Mono',monospace", whiteSpace:"nowrap" },
+  typePct:    { fontSize:11, fontWeight:700, fontFamily:"'IBM Plex Mono',monospace" },
+  cdiBadge:   { display:"flex", alignItems:"center", gap:8, borderTop:"1px solid #1a1a1a", flexShrink:0 },
+  cdiDot:     { width:7, height:7, borderRadius:50, background:"#F5C518", flexShrink:0, marginLeft:18 },
+  cdiText:    { fontSize:10, color:"#F5C518", fontFamily:"'IBM Plex Mono',monospace", whiteSpace:"nowrap" },
+  main:       { flex:1, minWidth:0, transition:"margin-left .28s cubic-bezier(.4,0,.2,1)" },
+  mobileBar:  { position:"fixed", top:0, left:0, right:0, height:54, background:"#111", borderBottom:"1px solid #222", display:"flex", alignItems:"center", gap:12, padding:"0 16px", zIndex:100 },
+  mobileCdi:  { marginLeft:"auto", fontSize:11, color:"#F5C518", fontFamily:"'IBM Plex Mono',monospace" },
+  bottomBar:  { position:"fixed", bottom:0, left:0, right:0, height:66, background:"#111", borderTop:"1px solid #222", display:"flex", alignItems:"center", justifyContent:"space-around", zIndex:100, paddingBottom:6 },
+  bbItem:     { display:"flex", flexDirection:"column", alignItems:"center", gap:3, background:"transparent", border:"none", color:"#555", cursor:"pointer", padding:"4px 3px", borderRadius:10, flex:1, transition:"all .15s" },
+  bbActive:   { color:"#F5C518" },
+  bbLabel:    { fontSize:8, fontFamily:"'Inter',sans-serif", fontWeight:700, textTransform:"uppercase", letterSpacing:.5 },
+  alertBanner:{ position:"fixed", top:0, left:0, right:0, background:"#1a1000", borderBottom:"1px solid #F5C51844", padding:"8px 20px", display:"flex", alignItems:"center", gap:10, zIndex:200, color:"#F5C518", fontFamily:"'IBM Plex Mono',monospace", fontSize:11 },
+  toast:      { position:"fixed", padding:"12px 20px", borderRadius:10, border:"1px solid", fontSize:13, fontFamily:"'IBM Plex Mono',monospace", zIndex:500 },
+};
+
+const P = {
+  root:       { maxWidth:1080, margin:"0 auto" },
+  pageHeader: { display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:32, flexWrap:"wrap", gap:16 },
+  pageTitle:  { fontSize:32, fontWeight:800, color:"#ffffff", letterSpacing:-1, lineHeight:1.1 },
+  pageSub:    { fontSize:13, color:"#666", marginTop:6 },
+  kpiRow:     { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(170px,1fr))", gap:14, marginBottom:28 },
+  kpiCard:    { background:"#111", border:"1px solid #222", borderRadius:14, padding:"18px 20px", transition:"border-color .2s" },
+  kpiLabel:   { fontSize:10, color:"#555", textTransform:"uppercase", letterSpacing:1.4, fontFamily:"'IBM Plex Mono',monospace", marginBottom:10 },
+  kpiValue:   { fontSize:22, fontWeight:800, letterSpacing:-.5, fontFamily:"'IBM Plex Mono',monospace" },
+  metaCard:   { background:"#111", border:"1px solid #F5C51833", borderRadius:14, padding:"18px 20px", marginBottom:28 },
+  metaTrack:  { height:6, background:"#1e1e1e", borderRadius:3, overflow:"hidden" },
+  metaFill:   { height:6, background:"linear-gradient(90deg,#c9a020,#F5C518)", borderRadius:3, transition:"width .6s cubic-bezier(.4,0,.2,1)" },
+  grid2:      { display:"grid", gap:16, marginBottom:20 },
+  chartCard:  { background:"#111", border:"1px solid #222", borderRadius:14, padding:"20px", marginBottom:0 },
+  chartTitle: { fontSize:10, fontWeight:700, color:"#555", textTransform:"uppercase", letterSpacing:1.5, marginBottom:16, fontFamily:"'IBM Plex Mono',monospace" },
+  filterRow:  { display:"flex", flexWrap:"wrap", gap:12, marginBottom:20, alignItems:"center" },
+  search:     { background:"#111", border:"1px solid #2a2a2a", borderRadius:8, color:"#fff", padding:"10px 14px", fontFamily:"'IBM Plex Mono',monospace", fontSize:13, outline:"none", width:200 },
+  chip:       { background:"#111", border:"1px solid #2a2a2a", borderRadius:20, padding:"6px 14px", color:"#666", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", cursor:"pointer", transition:"all .15s", whiteSpace:"nowrap" },
+  cardGrid:   { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(290px,1fr))", gap:16 },
+  invCard:    { background:"#111", border:"1px solid", borderRadius:14, padding:"20px", display:"flex", flexDirection:"column", gap:10 },
+  invCardTop: { display:"flex", justifyContent:"space-between", alignItems:"flex-start" },
+  typeIcon:   { width:36, height:36, borderRadius:10, display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0 },
+  catTag:     { display:"inline-block", border:"1px solid", borderRadius:4, padding:"2px 9px", fontSize:11, fontFamily:"'IBM Plex Mono',monospace" },
+  pill:       { border:"1px solid", borderRadius:6, padding:"4px 10px", fontSize:11, fontFamily:"'IBM Plex Mono',monospace" },
+  metrics:    { display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 },
+  metricBox:  { background:"#0a0a0a", borderRadius:8, padding:"9px 11px", border:"1px solid #1a1a1a" },
+  metricLabel:{ color:"#555", fontSize:10, textTransform:"uppercase", letterSpacing:.8, fontFamily:"'IBM Plex Mono',monospace" },
+  metricValue:{ color:"#ccc", fontSize:13, fontWeight:600, fontFamily:"'IBM Plex Mono',monospace", marginTop:3 },
+  dateTag:    { color:"#444", fontSize:11, fontFamily:"'IBM Plex Mono',monospace" },
+  setCard:    { background:"#111", border:"1px solid #222", borderRadius:14, padding:"22px", marginBottom:16 },
+  setTitle:   { fontSize:11, fontWeight:700, color:"#555", textTransform:"uppercase", letterSpacing:1.5, fontFamily:"'IBM Plex Mono',monospace", marginBottom:16 },
+  toggleBtn:  { background:"#111", border:"1px solid #2a2a2a", color:"#555", borderRadius:8, padding:"8px 16px", fontFamily:"'Inter',sans-serif", fontWeight:600, fontSize:12, cursor:"pointer", transition:"all .15s" },
+  toggleActive:{ background:"#F5C518", border:"1px solid #F5C518", color:"#000" },
+  table:      { width:"100%", borderCollapse:"collapse", fontFamily:"'IBM Plex Mono',monospace", fontSize:12 },
+  th:         { padding:"10px 16px", textAlign:"left", color:"#555", fontWeight:600, fontSize:10, letterSpacing:1, textTransform:"uppercase", borderBottom:"1px solid #1e1e1e", whiteSpace:"nowrap" },
+  tr:         { borderBottom:"1px solid #1a1a1a" },
+  td:         { padding:"11px 16px", color:"#aaa", whiteSpace:"nowrap" },
+  note:       { fontSize:10, color:"#444", marginTop:10, fontFamily:"'IBM Plex Mono',monospace", fontStyle:"italic" },
+  label:      { display:"block", fontSize:10, color:"#555", textTransform:"uppercase", letterSpacing:1.2, fontFamily:"'IBM Plex Mono',monospace", marginBottom:6, marginTop:14 },
+  input:      { background:"#0a0a0a", border:"1px solid #2a2a2a", borderRadius:8, color:"#fff", padding:"10px 14px", fontFamily:"'IBM Plex Mono',monospace", fontSize:13, outline:"none", width:"100%", boxSizing:"border-box", transition:"border-color .15s" },
+  btn:        { background:"#F5C518", color:"#000", border:"none", padding:"11px 22px", borderRadius:9, fontFamily:"'Inter',sans-serif", fontWeight:700, fontSize:13, cursor:"pointer", letterSpacing:.2, flexShrink:0, transition:"opacity .15s, transform .1s" },
+  btnSec:     { background:"transparent", border:"1px solid #333", color:"#F5C518", padding:"10px 16px", borderRadius:9, fontFamily:"'Inter',sans-serif", fontWeight:600, fontSize:12, cursor:"pointer", flexShrink:0, transition:"all .15s" },
+  btnCancel:  { background:"transparent", border:"1px solid #2a2a2a", color:"#666", borderRadius:9, padding:"10px 20px", fontFamily:"'Inter',sans-serif", fontWeight:600, fontSize:13, cursor:"pointer" },
+  iBtn:       { background:"transparent", border:"1px solid #222", borderRadius:6, padding:"5px 9px", fontSize:12, cursor:"pointer", color:"#666", transition:"all .15s" },
+  empty:      { textAlign:"center", padding:"56px 24px", color:"#444", background:"#111", borderRadius:14, border:"1px solid #1e1e1e", fontFamily:"'IBM Plex Mono',monospace", fontSize:13 },
+  sectionLabel:{ fontSize:10, color:"#555", textTransform:"uppercase", letterSpacing:1.4, fontFamily:"'IBM Plex Mono',monospace" },
+};
+
+const M = {
+  overlay:      { position:"fixed", inset:0, background:"rgba(0,0,0,.88)", display:"flex", justifyContent:"center", zIndex:300, backdropFilter:"blur(8px)", padding:16 },
+  box:          { background:"#111", border:"1px solid #222", padding:"28px", maxHeight:"90vh", overflowY:"auto", display:"flex", flexDirection:"column", gap:6 },
+  title:        { fontSize:20, fontWeight:800, color:"#fff", marginBottom:12 },
+  typeBtn:      { background:"#0a0a0a", border:"1px solid #2a2a2a", borderRadius:10, padding:"9px 4px", color:"#555", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:4, fontFamily:"'IBM Plex Mono',monospace", transition:"all .15s" },
+  catChip:      { background:"#0a0a0a", border:"1px solid #2a2a2a", borderRadius:6, padding:"6px 13px", color:"#555", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", cursor:"pointer", transition:"all .15s" },
+  catChipActive:{ borderColor:"#F5C518", color:"#F5C518", background:"#F5C51818" },
+  irNote:       { background:"#ff000008", border:"1px solid #ff444444", borderRadius:8, padding:"9px 13px", fontSize:11, color:"#ff8888", fontFamily:"'IBM Plex Mono',monospace" },
+  actions:      { display:"flex", gap:10, justifyContent:"flex-end", marginTop:18 },
+};
+
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;600;700;800&display=swap');
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0a0a0a; color: #fff; }
+.btn-hover { transition: opacity .15s, transform .1s; cursor: pointer; }
+.btn-hover:hover { opacity: .85; transform: translateY(-1px); }
+.card-hover { transition: transform .2s, box-shadow .2s, border-color .2s; }
+.card-hover:hover { transform: translateY(-3px); box-shadow: 0 12px 40px rgba(0,0,0,.6); border-color: #333 !important; }
+.nav-hover:hover { background: #1a1a1a !important; color: #fff !important; }
+.mt4 { margin-top: 10px; }
+select option { background: #111; color: #fff; }
+input:focus { border-color: #F5C518 !important; }
+::-webkit-scrollbar { height:4px; width:4px; }
+::-webkit-scrollbar-track { background: #111; }
+::-webkit-scrollbar-thumb { background: #333; border-radius:2px; }
+@media (max-width: 767px) {
+  .kpi-row { grid-template-columns: 1fr 1fr !important; gap: 10px !important; margin-bottom: 16px !important; }
+  .kpi-value { font-size: 16px !important; }
+  .page-title { font-size: 24px !important; }
+  .filter-row { flex-direction: column !important; align-items: stretch !important; gap: 10px !important; }
+  .search-input { width: 100% !important; }
+  .card-hover:hover { transform: none; box-shadow: none; }
+}
+`;
+
+
+document.getElementById('loading').style.display = 'none';
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+  </script>
+</body>
+</html>
