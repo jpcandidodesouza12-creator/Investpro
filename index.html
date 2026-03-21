@@ -6,14 +6,17 @@
   <title>InvestPro</title>
 
   <!-- 1. React 18 -->
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
 
-  <!-- 2. Recharts (depende do React estar carregado antes) -->
-  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <!-- 2. Prop-Types (dependência do Recharts) -->
+  <script src="https://cdn.jsdelivr.net/npm/prop-types@15/prop-types.min.js"></script>
 
-  <!-- 3. Babel (transpila JSX) - carregado por último -->
-  <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
+  <!-- 3. Recharts via jsDelivr -->
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
+
+  <!-- 4. Babel standalone -->
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
 
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -22,33 +25,67 @@
       position: fixed; inset: 0; background: #0a0908;
       display: flex; align-items: center; justify-content: center;
       flex-direction: column; gap: 16px; color: #e2c97e;
-      font-family: monospace; font-size: 14px;
+      font-family: monospace; font-size: 14px; z-index: 9999;
     }
-    #loading .spinner {
-      width: 32px; height: 32px; border: 3px solid #2a2820;
+    .spinner {
+      width: 36px; height: 36px; border: 3px solid #2a2820;
       border-top-color: #e2c97e; border-radius: 50%;
       animation: spin 0.8s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    #error-box {
+      display: none; position: fixed; inset: 0; background: #0a0908;
+      align-items: center; justify-content: center; z-index: 9999;
+    }
+    #error-box div {
+      background: #1a0808; border: 1px solid #e27e9a44; border-radius: 12px;
+      padding: 32px; max-width: 400px; text-align: center;
+      color: #e27e9a; font-family: monospace; font-size: 13px; line-height: 1.8;
+    }
   </style>
 </head>
 <body>
   <div id="loading">
     <div class="spinner"></div>
-    <span>Carregando InvestPro...</span>
+    <span>◈ Carregando InvestPro...</span>
   </div>
+
+  <div id="error-box">
+    <div>
+      <div style="font-size:32px;margin-bottom:12px">⚠️</div>
+      <strong>Erro ao carregar bibliotecas</strong><br><br>
+      <span id="error-msg">Biblioteca não carregou.</span><br><br>
+      <span style="color:#6a6458">Verifique sua conexão com a internet e recarregue a página (F5).</span>
+    </div>
+  </div>
+
   <div id="root"></div>
 
   <script>
-    // Garante que Recharts foi carregado antes do app rodar
-    window.addEventListener('load', function() {
-      if (typeof Recharts === 'undefined') {
-        document.getElementById('loading').innerHTML =
-          '<div style="color:#e27e9a;font-family:monospace;padding:32px;text-align:center">' +
-          '❌ Erro: Recharts não carregou.<br><br>' +
-          'Verifique sua conexão com a internet e recarregue a página.' +
-          '</div>';
-      }
+    function showError(msg) {
+      document.getElementById('loading').style.display = 'none';
+      var box = document.getElementById('error-box');
+      box.style.display = 'flex';
+      document.getElementById('error-msg').textContent = msg;
+    }
+
+    // Aguarda todos os scripts e verifica cada dependência
+    window.addEventListener('DOMContentLoaded', function() {
+      setTimeout(function() {
+        if (typeof React === 'undefined') {
+          showError('React não carregou. Verifique sua internet.'); return;
+        }
+        if (typeof ReactDOM === 'undefined') {
+          showError('ReactDOM não carregou. Verifique sua internet.'); return;
+        }
+        if (typeof Recharts === 'undefined') {
+          showError('Recharts não carregou. Tente limpar o cache (Ctrl+Shift+R).'); return;
+        }
+        if (typeof Babel === 'undefined') {
+          showError('Babel não carregou. Verifique sua internet.'); return;
+        }
+        // Tudo OK — o Babel vai transpilar e montar o app
+      }, 500);
     });
   </script>
 
@@ -2108,6 +2145,7 @@ select option { background: #13120f; color: #d4cfc5; }
 
 // ─── Mount ───────────────────────────────────────────────────────────────────
 document.getElementById('loading').style.display = 'none';
+document.getElementById('error-box').style.display = 'none';
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(React.createElement(App));
   </script>
