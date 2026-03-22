@@ -41,7 +41,7 @@ const LS_KEY    = "investpro_v6";
 const LS_AUTH   = "investpro_auth";
 
 // ─── Backend URL — troque pela URL do Railway após o deploy ───────────────────
-const API_URL   = "https://investpro-backend-production.up.railway.app";
+const API_URL   = "https://investpro-backend-production-d06b.up.railway.app";
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 function authLoad() {
@@ -56,13 +56,13 @@ function authClear() {
 }
 
 async function apiCall(method, path, body, token) {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
   const opts = {
     method,
     headers: { "Content-Type": "application/json" },
   };
   if (token) opts.headers["Authorization"] = `Bearer ${token}`;
   if (body)  opts.body = JSON.stringify(body);
-  const cleanPath = path.startsWith('/') ? path : `/${path}`;
   const res  = await fetch(`${API_URL}${cleanPath}`, opts);
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `Erro ${res.status}`);
@@ -367,12 +367,10 @@ async function fetchAllQuotes(watchlist, apiKey) {
   const br         = (watchlist.br         || []).join(", ");
   const us         = (watchlist.us         || []).join(", ");
   const crypto     = (watchlist.crypto     || []).join(", ");
+  const today      = new Date().toLocaleDateString("pt-BR");
 
-  const today = new Date().toLocaleDateString("pt-BR");
-
-  let rawText = "";
   try {
-    const response = await fetch('https://investpro-backend-production-d06b.up.railway.app/auth/login', { ... });
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -381,69 +379,59 @@ async function fetchAllQuotes(watchlist, apiKey) {
         "anthropic-dangerous-direct-browser-access": "true",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
+        model: "claude-3-5-sonnet-20240620",
         max_tokens: 2048,
-        system: "Você é um assistente financeiro. Responda APENAS com JSON válido entre <<<JSON e JSON>>>.",
+        system: "Você é um assistente financeiro. Responda APENAS com JSON válido, sem markdown, sem texto adicional.",
         messages: [{
           role: "user",
-          content: `Data: ${today}. Forneça cotações recentes e a taxa CDI atual do Brasil (% ao ano, ex: 14.75). Responda SOMENTE com este bloco:\n<<<JSON\n{"cdi":14.75,"currencies":{"USD":{"price":5.72,"change":0.03,"changePct":0.52}},"br":{"PETR4":{"price":38.5,"change":-0.2,"changePct":-0.51}},"us":{"AAPL":{"price":175.3,"change":1.2,"changePct":0.69}},"crypto":{"BTC":{"price":85000,"change":1200,"changePct":1.43}}}\nJSON>>>\nAtivos: moedas BRL (${currencies}), ações BR (${br}), ações EUA USD (${us}), crypto USD (${crypto}).`,
+          content: `Data: ${today}. Forneça cotações recentes e a taxa CDI atual do Brasil (% ao ano).
+Retorne SOMENTE este JSON (substitua pelos valores reais):
+{"cdi":14.75,"currencies":{"USD":{"price":5.72,"change":0.03,"changePct":0.52}},"br":{"PETR4":{"price":38.5,"change":-0.2,"changePct":-0.51}},"us":{"AAPL":{"price":175.3,"change":1.2,"changePct":0.69}},"crypto":{"BTC":{"price":85000,"change":1200,"changePct":1.43}}}
+Ativos: moedas BRL (${currencies}), ações BR (${br}), ações EUA USD (${us}), crypto USD (${crypto}). Use null se não encontrar.`,
         }],
       }),
     });
 
-    rawText = await res.text();
+    const rawText = await res.text();
 
     if (!res.ok) {
-      throw new Error(`HTTP ${res.status} — ${rawText.substring(0, 300)}`);
+      throw new Error(`HTTP ${res.status} — ${rawText.substring(0, 200)}`);
     }
 
-    const resp = JSON.parse(rawText);
+    // Extrai o texto da resposta da API
+    const resp    = JSON.parse(rawText);
     const allText = (resp.content || [])
       .filter(b => b.type === "text")
       .map(b => b.text || "")
       .join("\n");
 
     if (!allText.trim()) {
-      throw new Error(`stop_reason: ${resp.stop_reason} | blocos: ${(resp.content||[]).map(b=>b.type).join(",")} | raw: ${rawText.substring(0,200)}`);
+      throw new Error(`Resposta vazia. stop_reason: ${resp.stop_reason}`);
     }
 
-    // Strategy 1: <<<JSON ... JSON>>>
-    const ds = allText.indexOf("<<<JSON");
-    const de = allText.indexOf("JSON>>>");
-    if (ds !== -1 && de !== -1) {
-      try {
-        const parsed = JSON.parse(allText.slice(ds + 7, de).trim());
-        if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
-      } catch (e) { /* try next */ }
-    }
-
-    // Strategy 2: outermost { ... }
+    // Estratégia 1: JSON direto no texto
     const s = allText.indexOf("{");
     const e = allText.lastIndexOf("}");
     if (s !== -1 && e > s) {
       try {
         const parsed = JSON.parse(allText.slice(s, e + 1));
         if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
-      } catch (e) { /* try next */ }
+      } catch (_) { /* tenta próxima */ }
     }
 
-    // Strategy 3: markdown
+    // Estratégia 2: bloco markdown ```json ... ```
     const md = allText.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (md) {
       try {
         const parsed = JSON.parse(md[1].trim());
         if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
-      } catch (e) { /* fail below */ }
+      } catch (_) { /* falha abaixo */ }
     }
 
-    throw new Error(`JSON não encontrado. Resposta: "${allText.substring(0, 200).replace(/\n/g, " ")}"`);
+    throw new Error(`JSON não encontrado na resposta: "${allText.substring(0, 150).replace(/\n/g, " ")}"`);
 
   } catch (err) {
-    if (err.message.includes("JSON não encontrado") || err.message.includes("HTTP") || err.message.includes("stop_reason")) {
-      throw err;
-    }
-    // Network/fetch error
-    throw new Error(`Erro de rede: ${err.message} | raw: ${rawText.substring(0, 150)}`);
+    throw new Error(err.message || "Erro de rede ao buscar cotações.");
   }
 }
 
