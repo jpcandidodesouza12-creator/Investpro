@@ -458,13 +458,40 @@ function ChartTip({ active, payload, label }) {
 // APP
 // ═══════════════════════════════════════════════════════════════════════════════
 function App() {
-  // ── Auth state ──────────────────────────────────────────────────────────────
-  const [auth,      setAuth]      = useState(() => authLoad());
+  // ── Auth ─────────────────────────────────────────────────────────────────────
+  // TODOS os hooks devem ser declarados aqui — antes de qualquer return condicional
+  const [auth, setAuth] = useState(() => authLoad());
+
+  // ── App state ─────────────────────────────────────────────────────────────────
+  // Inicializador lazy: lsLoad() só é chamado uma vez, não a cada render
+  const [invs,     setInvs]     = useState(() => { const s = lsLoad(); return s?.investments ?? DEF_INVS; });
+  const [cats,     setCats]     = useState(() => { const s = lsLoad(); return s?.categories  ?? DEF_CATS; });
+  const [settings, setSettings] = useState(() => { const s = lsLoad(); return s?.settings    ?? DEFAULT_SETTINGS; });
+  const [deps,     setDeps]     = useState(() => { const s = lsLoad(); return s?.deposits     ?? []; });
+  const [nii,      setNii]      = useState(() => { const s = lsLoad(); return s?.nii          ?? 3; });
+  const [nci,      setNci]      = useState(() => { const s = lsLoad(); return s?.nci          ?? 4; });
+  const [ndi,      setNdi]      = useState(() => { const s = lsLoad(); return s?.ndi          ?? 1; });
+  const [quotes,   setQuotes]   = useState(() => { const s = lsLoad(); return s?.quotes       ?? DEF_QUOTES; });
+  const [renda,    setRenda]    = useState(() => { const s = lsLoad(); return s?.renda        ?? defRenda(); });
+  const [snaps,    setSnaps]    = useState(() => lsLoadSnaps());
+  const [apiKey,   setApiKey_]  = useState(() => { try { return localStorage.getItem("investpro_apikey") || ""; } catch(_) { return ""; } });
+  const [screen,   setScreen]   = useState("dashboard");
+  const [sideOpen, setSideOpen] = useState(true);
+  const [modal,    setModal]    = useState(null);
+  const [toast,    setToast]    = useState(null);
+  const [qLoading, setQLoading] = useState(false);
+
+  const toastRef  = useRef(null);
+  const isMobile  = useIsMobile();
+
+  // ── Valores derivados ─────────────────────────────────────────────────────────
   const isLoggedIn  = !!auth?.token;
   const userRole    = auth?.user?.role || "guest";
   const userModules = auth?.modules    || [];
   const isAdmin     = userRole === "admin";
+  const fx          = settings.fx || FX_DEFAULT;
 
+  // ── Auth handlers ─────────────────────────────────────────────────────────────
   function handleLogin(data) {
     authSave(data);
     setAuth(data);
@@ -476,30 +503,10 @@ function App() {
     setAuth(null);
   }
 
-  // ── Show login if not authenticated ────────────────────────────────────────
+  // ── Renderização condicional — após todos os hooks ────────────────────────────
   if (!isLoggedIn) {
     return <ScreenLogin onLogin={handleLogin} />;
   }
-  const saved = lsLoad();
-  const [invs,      setInvs]      = useState(saved?.investments ?? DEF_INVS);
-  const [cats,      setCats]      = useState(saved?.categories  ?? DEF_CATS);
-  const [settings,  setSettings]  = useState(saved?.settings    ?? DEFAULT_SETTINGS);
-  const [deps,      setDeps]      = useState(saved?.deposits     ?? []);
-  const [nii,       setNii]       = useState(saved?.nii          ?? 3);
-  const [nci,       setNci]       = useState(saved?.nci          ?? 4);
-  const [ndi,       setNdi]       = useState(saved?.ndi          ?? 1);
-  const [quotes,    setQuotes]    = useState(saved?.quotes        ?? DEF_QUOTES);
-  const [renda,     setRenda]     = useState(saved?.renda          ?? defRenda());
-  const [qLoading,  setQLoading]  = useState(false);
-  const [snaps,     setSnaps]     = useState(() => lsLoadSnaps());
-  const [apiKey,    setApiKey_]   = useState(() => { try { return localStorage.getItem("investpro_apikey") || ""; } catch(_) { return ""; } });
-  const [screen,    setScreen]    = useState("dashboard");
-  const [sideOpen,  setSideOpen]  = useState(true);
-  const [modal,     setModal]     = useState(null);
-  const [toast,     setToast]     = useState(null);
-  const toastRef = useRef(null);
-  const isMobile = useIsMobile();
-  const fx = settings.fx || FX_DEFAULT;
 
   const save = useCallback((i, c, s, d, ni, nc, nd, q, r) => {
     lsSave({ investments:i, categories:c, settings:s, deposits:d, nii:ni, nci:nc, ndi:nd, quotes:q, renda:r });
@@ -2091,93 +2098,220 @@ function ScreenCotacoes({ quotes, isMobile, onFetch, onUpdateWatchlist, qLoading
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUTH — LOGIN SCREEN
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─── Tela de Login + Solicitação de acesso ────────────────────────────────────
+// Duas views num único componente: "login" e "register"
+// Separadas aqui por responsabilidade, unificadas pela navegação entre elas
 function ScreenLogin({ onLogin }) {
+  const [view, setView] = useState("login"); // "login" | "register" | "success"
+
+  if (view === "register") {
+    return <ViewRegister onBack={() => setView("login")} onSuccess={() => setView("success")} />;
+  }
+  if (view === "success") {
+    return <ViewRegisterSuccess onBack={() => setView("login")} />;
+  }
+  return <ViewLogin onLogin={onLogin} onRegister={() => setView("register")} />;
+}
+
+// ─── View: formulário de login ────────────────────────────────────────────────
+function ViewLogin({ onLogin, onRegister }) {
   const [email,    setEmail]    = useState("");
   const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
-  const [showPass, setShowPass] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!email || !password) { setError("Preencha e-mail e senha."); return; }
-    setLoading(true); setError("");
+    if (!email.trim() || !password) { setError("Preencha e-mail e senha."); return; }
+    setLoading(true);
+    setError("");
     try {
-      const data = await apiCall("POST", "/auth/login", { email, password });
+      const data = await apiCall("POST", "/auth/login", { email: email.trim(), password });
       onLogin(data);
     } catch (err) {
-      setError(err.message || "Erro ao fazer login.");
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
+    <AuthLayout subtitle="Entre na sua conta">
+      <form onSubmit={handleSubmit} style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        <div>
+          <label style={P.label}>E-mail</label>
+          <input style={P.input} type="email" value={email}
+            onChange={e => setEmail(e.target.value)}
+            placeholder="seu@email.com" autoComplete="email" autoFocus />
+        </div>
+        <div>
+          <label style={P.label}>Senha</label>
+          <div style={{ position:"relative" }}>
+            <input style={{ ...P.input, paddingRight:44 }}
+              type={showPass ? "text" : "password"}
+              value={password} onChange={e => setPassword(e.target.value)}
+              placeholder="••••••••" autoComplete="current-password" />
+            <button type="button" onClick={() => setShowPass(s => !s)}
+              style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", color:"#555", fontSize:16 }}>
+              {showPass ? "🙈" : "👁️"}
+            </button>
+          </div>
+        </div>
+
+        <AuthError message={error} />
+
+        <button type="submit" disabled={loading}
+          style={{ ...P.btn, width:"100%", justifyContent:"center", padding:"13px", fontSize:15, marginTop:4, opacity:loading?0.6:1, cursor:loading?"not-allowed":"pointer" }}>
+          {loading ? "Entrando..." : "Entrar"}
+        </button>
+      </form>
+
+      <div style={{ textAlign:"center", marginTop:20 }}>
+        <span style={{ fontSize:13, color:"#555" }}>Não tem acesso? </span>
+        <button onClick={onRegister}
+          style={{ background:"none", border:"none", color:T.accent, fontSize:13, cursor:"pointer", fontWeight:600, padding:0 }}>
+          Solicitar acesso
+        </button>
+      </div>
+    </AuthLayout>
+  );
+}
+
+// ─── View: formulário de solicitação de acesso ────────────────────────────────
+function ViewRegister({ onBack, onSuccess }) {
+  const [form,    setForm]    = useState({ name:"", email:"", password:"", confirm:"" });
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState("");
+
+  function updateField(field, value) {
+    setForm(f => ({ ...f, [field]: value }));
+  }
+
+  function validate() {
+    if (!form.name.trim())         return "Nome é obrigatório.";
+    if (!form.email.trim())        return "E-mail é obrigatório.";
+    if (form.password.length < 6)  return "Senha deve ter pelo menos 6 caracteres.";
+    if (form.password !== form.confirm) return "As senhas não coincidem.";
+    return null;
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const validationError = validate();
+    if (validationError) { setError(validationError); return; }
+
+    setLoading(true);
+    setError("");
+    try {
+      await apiCall("POST", "/auth/register", {
+        name:     form.name.trim(),
+        email:    form.email.trim(),
+        password: form.password,
+      });
+      onSuccess();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <AuthLayout subtitle="Solicitar acesso">
+      <form onSubmit={handleSubmit} style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        <div>
+          <label style={P.label}>Nome completo</label>
+          <input style={P.input} value={form.name}
+            onChange={e => updateField("name", e.target.value)}
+            placeholder="João Silva" autoFocus />
+        </div>
+        <div>
+          <label style={P.label}>E-mail</label>
+          <input style={P.input} type="email" value={form.email}
+            onChange={e => updateField("email", e.target.value)}
+            placeholder="seu@email.com" autoComplete="email" />
+        </div>
+        <div>
+          <label style={P.label}>Senha</label>
+          <input style={P.input} type="password" value={form.password}
+            onChange={e => updateField("password", e.target.value)}
+            placeholder="mínimo 6 caracteres" autoComplete="new-password" />
+        </div>
+        <div>
+          <label style={P.label}>Confirmar senha</label>
+          <input style={P.input} type="password" value={form.confirm}
+            onChange={e => updateField("confirm", e.target.value)}
+            placeholder="repita a senha" autoComplete="new-password" />
+        </div>
+
+        <div style={{ background:"#111", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 14px", fontSize:12, color:"#555", fontFamily:T.mono }}>
+          Sua solicitação ficará pendente até o administrador aprovar.
+        </div>
+
+        <AuthError message={error} />
+
+        <button type="submit" disabled={loading}
+          style={{ ...P.btn, width:"100%", justifyContent:"center", padding:"13px", fontSize:15, opacity:loading?0.6:1, cursor:loading?"not-allowed":"pointer" }}>
+          {loading ? "Enviando..." : "Solicitar acesso"}
+        </button>
+      </form>
+
+      <div style={{ textAlign:"center", marginTop:20 }}>
+        <button onClick={onBack}
+          style={{ background:"none", border:"none", color:"#555", fontSize:13, cursor:"pointer", padding:0 }}>
+          ← Voltar ao login
+        </button>
+      </div>
+    </AuthLayout>
+  );
+}
+
+// ─── View: confirmação de solicitação enviada ─────────────────────────────────
+function ViewRegisterSuccess({ onBack }) {
+  return (
+    <AuthLayout subtitle="">
+      <div style={{ textAlign:"center", padding:"20px 0" }}>
+        <div style={{ fontSize:48, marginBottom:16 }}>✅</div>
+        <h2 style={{ fontSize:20, fontWeight:700, color:"#fff", marginBottom:10 }}>Solicitação enviada!</h2>
+        <p style={{ fontSize:14, color:"#555", lineHeight:1.6, marginBottom:24 }}>
+          Sua solicitação foi recebida.<br/>
+          Você será notificado quando o administrador aprovar seu acesso.
+        </p>
+        <button onClick={onBack} style={{ ...P.btnSec, margin:"0 auto" }}>
+          Voltar ao login
+        </button>
+      </div>
+    </AuthLayout>
+  );
+}
+
+// ─── Componentes compartilhados da área de auth ───────────────────────────────
+function AuthLayout({ subtitle, children }) {
+  return (
     <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", padding:20, fontFamily:T.sans }}>
       <div style={{ width:"100%", maxWidth:400 }}>
-        {/* Logo */}
-        <div style={{ textAlign:"center", marginBottom:40 }}>
+        <div style={{ textAlign:"center", marginBottom:36 }}>
           <div style={{ width:64, height:64, borderRadius:18, background:"#F5C518", display:"flex", alignItems:"center", justifyContent:"center", fontSize:36, margin:"0 auto 16px" }}>
             🪙
           </div>
-          <h1 style={{ fontSize:28, fontWeight:800, color:"#fff", letterSpacing:-1 }}>InvestPro</h1>
-          <p style={{ color:"#555", marginTop:6, fontSize:14 }}>Entre na sua conta</p>
+          <h1 style={{ fontSize:26, fontWeight:800, color:"#fff", letterSpacing:-1 }}>InvestPro</h1>
+          {subtitle && <p style={{ color:"#555", marginTop:6, fontSize:14 }}>{subtitle}</p>}
         </div>
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} style={{ display:"flex", flexDirection:"column", gap:14 }}>
-          <div>
-            <label style={P.label}>E-mail</label>
-            <input
-              style={P.input}
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="seu@email.com"
-              autoComplete="email"
-              autoFocus
-            />
-          </div>
-          <div>
-            <label style={P.label}>Senha</label>
-            <div style={{ position:"relative" }}>
-              <input
-                style={{ ...P.input, paddingRight:44 }}
-                type={showPass ? "text" : "password"}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="••••••••"
-                autoComplete="current-password"
-              />
-              <button type="button"
-                onClick={() => setShowPass(s => !s)}
-                style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", color:"#555", fontSize:16 }}>
-                {showPass ? "🙈" : "👁️"}
-              </button>
-            </div>
-          </div>
-
-          {error && (
-            <div style={{ background:"#1a0000", border:"1px solid #ef444433", borderRadius:9, padding:"10px 14px", fontSize:13, color:"#f87171", fontFamily:T.mono }}>
-              {error}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading}
-            style={{ ...P.btn, width:"100%", justifyContent:"center", padding:"13px", fontSize:15, marginTop:4, opacity:loading?0.6:1, cursor:loading?"not-allowed":"pointer" }}>
-            {loading ? "Entrando..." : "Entrar"}
-          </button>
-        </form>
-
-        <p style={{ textAlign:"center", marginTop:28, fontSize:12, color:"#444", fontFamily:T.mono }}>
-          InvestPro v6 · Dados protegidos com JWT
+        {children}
+        <p style={{ textAlign:"center", marginTop:28, fontSize:11, color:"#333", fontFamily:T.mono }}>
+          InvestPro · Dados protegidos com JWT
         </p>
       </div>
+    </div>
+  );
+}
+
+function AuthError({ message }) {
+  if (!message) return null;
+  return (
+    <div style={{ background:"#1a0000", border:"1px solid #ef444433", borderRadius:9, padding:"10px 14px", fontSize:13, color:"#f87171", fontFamily:T.mono }}>
+      {message}
     </div>
   );
 }
@@ -2200,8 +2334,28 @@ function RoleBadge({ role }) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN PANEL
 // ═══════════════════════════════════════════════════════════════════════════════
+const MODULE_LABELS = {
+  dashboard:   "Dashboard",
+  investments: "Investimentos",
+  renda:       "Minha Renda",
+  history:     "Aportes",
+  comparator:  "Comparador",
+  projection:  "Projeção",
+  quotes:      "Cotações",
+  categories:  "Categorias",
+  settings:    "Config.",
+};
+
+const ADMIN_TABS = [
+  { id:"users",       label:"Usuários"       },
+  { id:"pending",     label:"Solicitações"   },
+  { id:"new",         label:"Novo usuário"   },
+  { id:"permissions", label:"Permissões"     },
+];
+
 function ScreenAdmin({ auth, isMobile }) {
   const [users,     setUsers]     = useState([]);
+  const [pending,   setPending]   = useState([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState("");
   const [newUser,   setNewUser]   = useState({ name:"", email:"", password:"", role:"user" });
@@ -2210,25 +2364,20 @@ function ScreenAdmin({ auth, isMobile }) {
   const [modules,   setModules]   = useState({});
   const [activeTab, setActiveTab] = useState("users");
 
-  const ALL_MODULES_LABELS = {
-    dashboard:   "Dashboard",
-    investments: "Investimentos",
-    renda:       "Minha Renda",
-    history:     "Aportes",
-    comparator:  "Comparador",
-    projection:  "Projeção",
-    quotes:      "Cotações",
-    categories:  "Categorias",
-    settings:    "Config.",
-  };
+  const editingUser = users.find(u => u.id === editId);
 
-  async function loadUsers() {
-    setLoading(true); setError("");
+  async function loadAll() {
+    setLoading(true);
+    setError("");
     try {
-      const data = await apiCall("GET", "/admin/users", null, auth.token);
-      setUsers(data);
+      const [usersData, pendingData] = await Promise.all([
+        apiCall("GET", "/admin/users",   null, auth.token),
+        apiCall("GET", "/admin/pending", null, auth.token),
+      ]);
+      setUsers(usersData);
+      setPending(pendingData);
       const mods = {};
-      data.forEach(u => { mods[u.id] = u.modules || []; });
+      usersData.forEach(u => { mods[u.id] = u.modules || []; });
       setModules(mods);
     } catch (err) {
       setError(err.message);
@@ -2237,7 +2386,22 @@ function ScreenAdmin({ auth, isMobile }) {
     }
   }
 
-  useEffect(() => { loadUsers(); }, []);
+  useEffect(() => { loadAll(); }, []);
+
+  async function approveUser(userId, role = "user") {
+    try {
+      await apiCall("PUT", `/admin/pending/${userId}/approve`, { role }, auth.token);
+      await loadAll();
+    } catch (err) { setError(err.message); }
+  }
+
+  async function rejectUser(userId) {
+    if (!window.confirm("Recusar esta solicitação?")) return;
+    try {
+      await apiCall("PUT", `/admin/pending/${userId}/reject`, null, auth.token);
+      await loadAll();
+    } catch (err) { setError(err.message); }
+  }
 
   async function createUser() {
     if (!newUser.name || !newUser.email || !newUser.password) return;
@@ -2245,7 +2409,8 @@ function ScreenAdmin({ auth, isMobile }) {
     try {
       await apiCall("POST", "/admin/users", newUser, auth.token);
       setNewUser({ name:"", email:"", password:"", role:"user" });
-      await loadUsers();
+      await loadAll();
+      setActiveTab("users");
     } catch (err) {
       setError(err.message);
     } finally {
@@ -2258,11 +2423,12 @@ function ScreenAdmin({ auth, isMobile }) {
     const updated  = current.includes(module)
       ? current.filter(m => m !== module)
       : [...current, module];
+
+    // Optimistic update — reverte se der erro
     setModules(m => ({ ...m, [userId]: updated }));
     try {
       await apiCall("PUT", `/admin/users/${userId}/modules`, { modules: updated }, auth.token);
     } catch (err) {
-      // Revert on error
       setModules(m => ({ ...m, [userId]: current }));
       setError(err.message);
     }
@@ -2271,46 +2437,52 @@ function ScreenAdmin({ auth, isMobile }) {
   async function toggleActive(user) {
     try {
       await apiCall("PUT", `/admin/users/${user.id}`, { active: !user.active }, auth.token);
-      await loadUsers();
+      await loadAll();
     } catch (err) { setError(err.message); }
   }
 
   async function deleteUser(id) {
-    if (!window.confirm("Remover este usuário?")) return;
+    if (!window.confirm("Remover este usuário permanentemente?")) return;
     try {
       await apiCall("DELETE", `/admin/users/${id}`, null, auth.token);
-      await loadUsers();
+      await loadAll();
     } catch (err) { setError(err.message); }
   }
-
-  const editingUser = users.find(u => u.id === editId);
 
   return (
     <div style={P.root}>
       <PageHeader title="Painel Admin" subtitle="Gerencie usuários e permissões de acesso" />
 
       {error && (
-        <div style={{ background:"#1a0000", border:"1px solid #ef444433", borderRadius:10, padding:"12px 16px", marginBottom:20, fontSize:13, color:"#f87171", fontFamily:T.mono }}>
-          ✗ {error}
+        <div style={{ background:"#1a0000", border:"1px solid #ef444433", borderRadius:10, padding:"12px 16px", marginBottom:20, fontSize:13, color:"#f87171", fontFamily:T.mono, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span>✗ {error}</span>
+          <button onClick={() => setError("")} style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", fontSize:16 }}>×</button>
         </div>
       )}
 
       {/* Tabs */}
-      <div style={{ display:"flex", gap:4, marginBottom:24, background:T.surface2, borderRadius:12, padding:4, border:`1px solid ${T.border}`, width:"fit-content" }}>
-        {[["users","👥 Usuários"],["new","➕ Novo Usuário"],["permissions","🔐 Permissões"]].map(([id,label]) => (
-          <button key={id} onClick={() => setActiveTab(id)}
-            style={{ ...P.toggleBtn, ...(activeTab===id ? P.toggleActive : {}), padding:"8px 18px", fontSize:13 }}>
-            {label}
+      <div style={{ display:"flex", gap:4, marginBottom:24, background:T.surface2, borderRadius:12, padding:4, border:`1px solid ${T.border}`, width:"fit-content", flexWrap:"wrap" }}>
+        {ADMIN_TABS.map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+            style={{ ...P.toggleBtn, ...(activeTab===tab.id ? P.toggleActive : {}), padding:"8px 16px", fontSize:13, position:"relative" }}>
+            {tab.label}
+            {tab.id === "pending" && pending.length > 0 && (
+              <span style={{ position:"absolute", top:-4, right:-4, width:18, height:18, borderRadius:50, background:"#ef4444", color:"#fff", fontSize:10, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                {pending.length}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
-      {/* ── Lista de usuários ── */}
+      {/* ── Usuários ativos ── */}
       {activeTab === "users" && (
         <div style={P.chartCard}>
-          <div style={P.chartTitle}>Usuários cadastrados</div>
+          <div style={P.chartTitle}>Usuários ativos</div>
           {loading ? (
             <div style={{ color:"#555", fontFamily:T.mono, fontSize:13, padding:"20px 0" }}>Carregando...</div>
+          ) : users.length === 0 ? (
+            <Empty>Nenhum usuário cadastrado</Empty>
           ) : (
             <div style={{ overflowX:"auto" }}>
               <table style={P.table}>
@@ -2334,7 +2506,7 @@ function ScreenAdmin({ auth, isMobile }) {
                           {u.active ? "Ativo" : "Inativo"}
                         </button>
                       </td>
-                      <td style={{ ...P.td, fontSize:12 }}>{(modules[u.id]||[]).length} módulos</td>
+                      <td style={{ ...P.td, color:"#555", fontSize:12 }}>{(modules[u.id]||[]).length} módulos</td>
                       <td style={P.td}>
                         <div style={{ display:"flex", gap:6 }}>
                           <IBtn onClick={() => { setEditId(u.id); setActiveTab("permissions"); }} title="Editar permissões" iconName="edit" />
@@ -2350,28 +2522,78 @@ function ScreenAdmin({ auth, isMobile }) {
         </div>
       )}
 
+      {/* ── Solicitações pendentes ── */}
+      {activeTab === "pending" && (
+        <div style={P.chartCard}>
+          <div style={P.chartTitle}>Solicitações aguardando aprovação</div>
+          {loading ? (
+            <div style={{ color:"#555", fontFamily:T.mono, fontSize:13, padding:"20px 0" }}>Carregando...</div>
+          ) : pending.length === 0 ? (
+            <Empty>Nenhuma solicitação pendente</Empty>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {pending.map(u => (
+                <div key={u.id} style={{ display:"flex", alignItems:"center", gap:16, padding:"14px 16px", background:T.surface2, borderRadius:10, border:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+                  <div style={{ flex:1, minWidth:120 }}>
+                    <div style={{ fontSize:14, fontWeight:600, color:"#fff" }}>{u.name}</div>
+                    <div style={{ fontSize:11, color:"#555", fontFamily:T.mono, marginTop:2 }}>{u.email}</div>
+                    <div style={{ fontSize:11, color:"#444", marginTop:4 }}>
+                      Solicitado em {new Date(u.created_at).toLocaleDateString("pt-BR")}
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                    <select
+                      defaultValue="user"
+                      id={`role-${u.id}`}
+                      style={{ ...P.input, width:"auto", padding:"6px 10px", fontSize:12 }}>
+                      <option value="user">Usuário</option>
+                      <option value="guest">Convidado</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button
+                      onClick={() => approveUser(u.id, document.getElementById(`role-${u.id}`).value)}
+                      style={{ ...P.btn, padding:"7px 16px", fontSize:12 }}>
+                      Aprovar
+                    </button>
+                    <button
+                      onClick={() => rejectUser(u.id)}
+                      style={{ ...P.btnCancel, padding:"7px 16px", fontSize:12, color:"#ef4444", borderColor:"#ef444433" }}>
+                      Recusar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Novo usuário ── */}
       {activeTab === "new" && (
         <div style={{ ...P.chartCard, maxWidth:500 }}>
-          <div style={P.chartTitle}>Criar novo usuário</div>
+          <div style={P.chartTitle}>Criar usuário diretamente</div>
           <label style={P.label}>Nome completo</label>
-          <input style={P.input} value={newUser.name} onChange={e => setNewUser(u => ({ ...u, name:e.target.value }))} placeholder="João Silva" />
+          <input style={P.input} value={newUser.name} placeholder="João Silva"
+            onChange={e => setNewUser(u => ({ ...u, name:e.target.value }))} />
           <label style={P.label}>E-mail</label>
-          <input style={P.input} type="email" value={newUser.email} onChange={e => setNewUser(u => ({ ...u, email:e.target.value }))} placeholder="joao@email.com" />
+          <input style={P.input} type="email" value={newUser.email} placeholder="joao@email.com"
+            onChange={e => setNewUser(u => ({ ...u, email:e.target.value }))} />
           <label style={P.label}>Senha inicial</label>
-          <input style={P.input} type="password" value={newUser.password} onChange={e => setNewUser(u => ({ ...u, password:e.target.value }))} placeholder="mínimo 6 caracteres" />
+          <input style={P.input} type="password" value={newUser.password} placeholder="mínimo 6 caracteres"
+            onChange={e => setNewUser(u => ({ ...u, password:e.target.value }))} />
           <label style={P.label}>Perfil</label>
-          <select style={{ ...P.input, cursor:"pointer" }} value={newUser.role} onChange={e => setNewUser(u => ({ ...u, role:e.target.value }))}>
+          <select style={{ ...P.input, cursor:"pointer" }} value={newUser.role}
+            onChange={e => setNewUser(u => ({ ...u, role:e.target.value }))}>
             <option value="user">Usuário — acesso padrão</option>
             <option value="guest">Convidado — acesso limitado</option>
             <option value="admin">Admin — acesso total</option>
           </select>
-          <div style={{ background:T.surface2, border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 14px", marginTop:12, fontSize:12, color:"#555", fontFamily:T.mono }}>
-            ℹ️ As permissões padrão do perfil serão aplicadas. Você pode ajustar individualmente depois.
-          </div>
-          <div style={{ marginTop:18 }}>
+          <p style={{ ...P.note, marginTop:12 }}>
+            Usuário criado aqui já entra como ativo, sem precisar de aprovação.
+          </p>
+          <div style={{ marginTop:16 }}>
             <Btn onClick={createUser} disabled={saving}>
-              {saving ? "Criando..." : "Criar Usuário"}
+              {saving ? "Criando..." : "Criar usuário"}
             </Btn>
           </div>
         </div>
@@ -2380,8 +2602,7 @@ function ScreenAdmin({ auth, isMobile }) {
       {/* ── Permissões ── */}
       {activeTab === "permissions" && (
         <div>
-          {/* User selector */}
-          <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:24 }}>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:20 }}>
             {users.filter(u => u.role !== "admin").map(u => (
               <button key={u.id} onClick={() => setEditId(u.id)}
                 style={{ padding:"8px 16px", borderRadius:20, border:"1px solid", fontSize:12, cursor:"pointer", fontFamily:T.mono, background:editId===u.id?T.accentDim:T.surface, color:editId===u.id?T.accent:"#aaa", borderColor:editId===u.id?T.accent:T.border2 }}>
@@ -2394,18 +2615,18 @@ function ScreenAdmin({ auth, isMobile }) {
             <div style={P.chartCard}>
               <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
                 <div style={{ flex:1 }}>
-                  <div style={{ fontSize:16, fontWeight:700, color:"#fff" }}>{editingUser.name}</div>
+                  <div style={{ fontSize:15, fontWeight:700, color:"#fff" }}>{editingUser.name}</div>
                   <div style={{ fontSize:11, color:"#555", fontFamily:T.mono, marginTop:2 }}>{editingUser.email}</div>
                 </div>
                 <RoleBadge role={editingUser.role} />
               </div>
-              <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:10 }}>
-                {Object.entries(ALL_MODULES_LABELS).map(([mod, label]) => {
+              <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:8 }}>
+                {Object.entries(MODULE_LABELS).map(([mod, label]) => {
                   const enabled = (modules[editingUser.id] || []).includes(mod);
                   return (
                     <button key={mod} onClick={() => toggleModule(editingUser.id, mod)}
                       style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px", borderRadius:10, background:enabled?T.accentDim:T.surface2, border:`1px solid ${enabled?T.accent:T.border}`, cursor:"pointer", transition:"all .15s", textAlign:"left" }}>
-                      <div style={{ width:20, height:20, borderRadius:6, background:enabled?"#F5C518":"#2a2a2a", border:`2px solid ${enabled?"#F5C518":"#444"}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:12, color:"#000", fontWeight:800 }}>
+                      <div style={{ width:18, height:18, borderRadius:5, background:enabled?T.accent:"#2a2a2a", border:`2px solid ${enabled?T.accent:"#444"}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:11, color:"#000", fontWeight:800 }}>
                         {enabled ? "✓" : ""}
                       </div>
                       <span style={{ fontSize:13, color:enabled?"#fff":"#666", fontWeight:enabled?600:400 }}>{label}</span>
@@ -2413,16 +2634,17 @@ function ScreenAdmin({ auth, isMobile }) {
                   );
                 })}
               </div>
-              <p style={{ ...P.note, marginTop:14 }}>✓ As alterações são salvas automaticamente.</p>
+              <p style={P.note}>Alterações salvas automaticamente.</p>
             </div>
           ) : (
-            <div style={P.empty}>Selecione um usuário acima para editar suas permissões.</div>
+            <Empty>Selecione um usuário acima para editar suas permissões.</Empty>
           )}
         </div>
       )}
     </div>
   );
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MODALS
