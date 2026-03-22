@@ -11,6 +11,7 @@ const adminRoutes = require("./routes/admin");
 const dataRoutes  = require("./routes/data");
 
 const app  = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
 
 // ─── Configurações e Segurança ──────────────────────────────────────────────
