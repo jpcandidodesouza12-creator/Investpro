@@ -1,9 +1,9 @@
 require("dotenv").config();
 
-const express    = require("express");
-const helmet     = require("helmet");
-const cors       = require("cors");
-const rateLimit  = require("express-rate-limit");
+const express     = require("express");
+const helmet      = require("helmet");
+const cors        = require("cors");
+const rateLimit   = require("express-rate-limit");
 const { setupDatabase, seedAdmin } = require("./database");
 
 const authRoutes  = require("./routes/auth");
@@ -13,63 +13,49 @@ const dataRoutes  = require("./routes/data");
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
-// ─── Segurança ────────────────────────────────────────────────────────────────
+// ─── Configurações e Segurança ──────────────────────────────────────────────
 app.use(helmet());
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || "*",
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:5500",  // Live Server do VS Code
-  ],
+  origin: "*", // Permite que a Vercel acesse o Backend sem erros de CORS
   credentials: true,
 }));
 app.use(express.json({ limit: "2mb" }));
 
-// Rate limiting — protege contra força bruta
-app.use("/auth/login", rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
+// Proteção contra muitas tentativas de login
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
   max: 10,
-  message: { error: "Muitas tentativas de login. Tente novamente em 15 minutos." },
-}));
-
-app.use("/", rateLimit({
-  windowMs: 60 * 1000, // 1 minuto
-  max: 120,
-}));
-
-// ─── Rotas ────────────────────────────────────────────────────────────────────
-app.use("/auth",  authRoutes);
-app.use("/admin", adminRoutes);
-app.use("/data",  dataRoutes);
-
-// Health check
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  message: { error: "Muitas tentativas. Tente novamente em 15 minutos." },
 });
 
-// Rota não encontrada
-app.use((req, res) => {
-  res.status(404).json({ error: "Rota não encontrada" });
+// ─── Rotas ──────────────────────────────────────────────────────────────────
+app.use("/auth", loginLimiter, authRoutes);
+app.use("/admin", adminRoutes);
+app.use("/data", dataRoutes);
+
+// Rota de teste (Health Check)
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", message: "InvestPro Backend is running" });
 });
 
 // Tratamento de erros globais
 app.use((err, req, res, next) => {
-  console.error("Unhandled error:", err);
+  console.error("Erro no Servidor:", err);
   res.status(500).json({ error: "Erro interno do servidor" });
 });
 
-// ─── Start ────────────────────────────────────────────────────────────────────
+// ─── Inicialização ──────────────────────────────────────────────────────────
 async function start() {
   try {
-    await setupDatabase();
-    await seedAdmin();
-    app.listen(PORT, () => {
-      console.log(`✓ InvestPro Backend rodando na porta ${PORT}`);
-      console.log(`  Health: http://localhost:${PORT}/health`);
+    await setupDatabase(); // Cria as tabelas no PostgreSQL
+    await seedAdmin();     // Cria o usuário admin@teste.com se não existir
+    
+    // O '0.0.0.0' é fundamental para o Railway expor o serviço
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`✓ Servidor rodando na porta ${PORT}`);
     });
   } catch (err) {
-    console.error("✗ Falha ao iniciar:", err.message);
+    console.error("✗ Falha crítica ao iniciar:", err.message);
     process.exit(1);
   }
 }
