@@ -1,62 +1,94 @@
 require("dotenv").config();
 
-const express     = require("express");
-const helmet      = require("helmet");
-const cors        = require("cors");
-const rateLimit   = require("express-rate-limit");
-const { setupDatabase, seedAdmin } = require("./database");
-
-const authRoutes  = require("./routes/auth");
-const adminRoutes = require("./routes/admin");
-const dataRoutes  = require("./routes/data");
+const express   = require("express");
+const helmet    = require("helmet");
+const cors      = require("cors");
+const rateLimit = require("express-rate-limit");
+const { setupDatabase, seedAdmin, closePool } = require("./database");
 
 const app  = express();
-app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
 
-// ─── Configurações e Segurança ──────────────────────────────────────────────
+const ALLOWED_ORIGINS = [
+  process.env.FRONTEND_URL,
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "http://127.0.0.1:5500",
+].filter(Boolean);
+
+// ─── Middlewares globais ───────────────────────────────────────────────────────
 app.use(helmet());
-app.use(cors({
-  origin: "*", // Permite que a Vercel acesse o Backend sem erros de CORS
-  credentials: true,
-}));
+app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 app.use(express.json({ limit: "2mb" }));
 
-// Proteção contra muitas tentativas de login
+// ─── Rate limiting ─────────────────────────────────────────────────────────────
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60 * 1000, // 15 minutos
   max: 10,
   message: { error: "Muitas tentativas. Tente novamente em 15 minutos." },
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 
-// ─── Rotas ──────────────────────────────────────────────────────────────────
-app.use("/auth", loginLimiter, authRoutes);
-app.use("/admin", adminRoutes);
-app.use("/data", dataRoutes);
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hora
+  max: 5,
+  message: { error: "Muitas solicitações. Tente novamente em 1 hora." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-// Rota de teste (Health Check)
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(globalLimiter);
+
+// ─── Rotas ────────────────────────────────────────────────────────────────────
+app.use("/auth/login",    loginLimiter);
+app.use("/auth/register", registerLimiter);
+
+app.use("/auth",  require("./routes/auth"));
+app.use("/admin", require("./routes/admin"));
+app.use("/data",  require("./routes/data"));
+
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", message: "InvestPro Backend is running" });
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Tratamento de erros globais
+app.use((req, res) => res.status(404).json({ error: "Rota não encontrada" }));
+
 app.use((err, req, res, next) => {
-  console.error("Erro no Servidor:", err);
+  console.error("Unhandled error:", err);
   res.status(500).json({ error: "Erro interno do servidor" });
 });
 
-// ─── Inicialização ──────────────────────────────────────────────────────────
+// ─── Start ────────────────────────────────────────────────────────────────────
 async function start() {
   try {
-    await setupDatabase(); // Cria as tabelas no PostgreSQL
-    await seedAdmin();     // Cria o usuário admin@teste.com se não existir
-    
-    // O '0.0.0.0' é fundamental para o Railway expor o serviço
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`✓ Servidor rodando na porta ${PORT}`);
+    await setupDatabase();
+    await seedAdmin();
+    const server = app.listen(PORT, () => {
+      console.log(`✓ InvestPro Backend na porta ${PORT}`);
     });
+
+    // Graceful shutdown — fecha o pool do PostgreSQL antes de morrer
+    const shutdown = async (signal) => {
+      console.log(`\n${signal} recebido — encerrando servidor...`);
+      server.close(async () => {
+        await closePool();
+        console.log("✓ Servidor encerrado com segurança");
+        process.exit(0);
+      });
+    };
+
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT",  () => shutdown("SIGINT"));
   } catch (err) {
-    console.error("✗ Falha crítica ao iniciar:", err.message);
+    console.error("✗ Falha ao iniciar:", err.message);
     process.exit(1);
   }
 }
