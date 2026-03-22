@@ -1,35 +1,79 @@
 const express = require("express");
 const bcrypt  = require("bcryptjs");
-const { pool, getUserModules, setUserModules, ALL_MODULES, DEFAULT_PERMISSIONS } = require("../database");
+const { pool, getUserModules, setUserModules, ALL_MODULES, DEFAULT_PERMISSIONS, USER_STATUS } = require("../database");
 const { requireAuth, requireAdmin } = require("../middleware/auth");
 
 const router = express.Router();
-
-// Todas as rotas exigem Admin
 router.use(requireAuth, requireAdmin);
 
-// ─── GET /admin/users — lista todos os usuários ───────────────────────────────
+const SALT_ROUNDS = 12;
+
+// ─── GET /admin/users — lista usuários ativos e rejeitados ────────────────────
 router.get("/users", async (req, res) => {
   try {
-    const users = await pool.query(
-      "SELECT id, name, email, role, active, created_at FROM users ORDER BY created_at DESC"
+    const { rows } = await pool.query(
+      "SELECT id, name, email, role, status, active, created_at FROM users WHERE status != 'pending' ORDER BY created_at DESC"
     );
-
-    // Busca módulos de cada usuário
-    const result = await Promise.all(
-      users.rows.map(async u => ({
-        ...u,
-        modules: await getUserModules(u.id),
-      }))
+    const users = await Promise.all(
+      rows.map(async u => ({ ...u, modules: await getUserModules(u.id) }))
     );
-
-    res.json(result);
+    res.json(users);
   } catch (err) {
     res.status(500).json({ error: "Erro ao listar usuários" });
   }
 });
 
-// ─── POST /admin/users — cria novo usuário ────────────────────────────────────
+// ─── GET /admin/pending — solicitações aguardando aprovação ───────────────────
+router.get("/pending", async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, name, email, created_at FROM users WHERE status = 'pending' ORDER BY created_at ASC"
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao listar solicitações" });
+  }
+});
+
+// ─── PUT /admin/pending/:id/approve — aprova solicitação ─────────────────────
+router.put("/pending/:id/approve", async (req, res) => {
+  const userId = parseInt(req.params.id);
+  const { role = "user" } = req.body;
+
+  if (!["admin", "user", "guest"].includes(role)) {
+    return res.status(400).json({ error: "Perfil inválido" });
+  }
+
+  try {
+    const { rows } = await pool.query(
+      "UPDATE users SET status = 'active', active = true, role = $1, updated_at = NOW() WHERE id = $2 AND status = 'pending' RETURNING id, name, email, role",
+      [role, userId]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Solicitação não encontrada" });
+
+    await setUserModules(userId, DEFAULT_PERMISSIONS[role]);
+    res.json({ ...rows[0], message: "Usuário aprovado com sucesso" });
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao aprovar usuário" });
+  }
+});
+
+// ─── PUT /admin/pending/:id/reject — recusa solicitação ──────────────────────
+router.put("/pending/:id/reject", async (req, res) => {
+  const userId = parseInt(req.params.id);
+  try {
+    const { rows } = await pool.query(
+      "UPDATE users SET status = 'rejected', updated_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING id, name",
+      [userId]
+    );
+    if (!rows.length) return res.status(404).json({ error: "Solicitação não encontrada" });
+    res.json({ message: `Solicitação de ${rows[0].name} recusada` });
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao recusar solicitação" });
+  }
+});
+
+// ─── POST /admin/users — cria usuário diretamente (já ativo) ─────────────────
 router.post("/users", async (req, res) => {
   const { name, email, password, role = "user" } = req.body;
 
@@ -37,50 +81,34 @@ router.post("/users", async (req, res) => {
     return res.status(400).json({ error: "Nome, e-mail e senha são obrigatórios" });
   }
   if (!["admin", "user", "guest"].includes(role)) {
-    return res.status(400).json({ error: "Perfil inválido (admin/user/guest)" });
+    return res.status(400).json({ error: "Perfil inválido" });
   }
   if (password.length < 6) {
     return res.status(400).json({ error: "Senha deve ter pelo menos 6 caracteres" });
   }
 
   try {
-    const exists = await pool.query(
-      "SELECT id FROM users WHERE email = $1",
-      [email.toLowerCase().trim()]
-    );
-    if (exists.rows.length > 0) {
-      return res.status(409).json({ error: "E-mail já cadastrado" });
-    }
+    const exists = await pool.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase().trim()]);
+    if (exists.rows.length > 0) return res.status(409).json({ error: "E-mail já cadastrado" });
 
-    const hash = await bcrypt.hash(password, 12);
+    const hash   = await bcrypt.hash(password, SALT_ROUNDS);
     const result = await pool.query(
-      "INSERT INTO users (name, email, password, role) VALUES ($1,$2,$3,$4) RETURNING id, name, email, role",
+      "INSERT INTO users (name, email, password, role, status) VALUES ($1,$2,$3,$4,'active') RETURNING id, name, email, role",
       [name.trim(), email.toLowerCase().trim(), hash, role]
     );
-
-    const newUser = result.rows[0];
-
-    // Permissões padrão do perfil
-    await setUserModules(newUser.id, DEFAULT_PERMISSIONS[role]);
-
-    res.status(201).json({
-      ...newUser,
-      modules: DEFAULT_PERMISSIONS[role],
-      message: "Usuário criado com sucesso",
-    });
+    await setUserModules(result.rows[0].id, DEFAULT_PERMISSIONS[role]);
+    res.status(201).json({ ...result.rows[0], modules: DEFAULT_PERMISSIONS[role] });
   } catch (err) {
-    console.error("Create user error:", err);
     res.status(500).json({ error: "Erro ao criar usuário" });
   }
 });
 
-// ─── PUT /admin/users/:id — edita nome, perfil e status ─────────────────────
+// ─── PUT /admin/users/:id — edita nome, perfil, status ───────────────────────
 router.put("/users/:id", async (req, res) => {
-  const { id } = req.params;
+  const userId = parseInt(req.params.id);
   const { name, role, active } = req.body;
 
-  // Impede editar o próprio Admin Master
-  if (parseInt(id) === req.user.id && role && role !== "admin") {
+  if (userId === req.user.id && role && role !== "admin") {
     return res.status(400).json({ error: "Você não pode remover seu próprio perfil de Admin" });
   }
 
@@ -88,85 +116,69 @@ router.put("/users/:id", async (req, res) => {
     const fields = [];
     const values = [];
     let i = 1;
-
-    if (name)   { fields.push(`name = $${i++}`);   values.push(name.trim()); }
-    if (role)   { fields.push(`role = $${i++}`);   values.push(role); }
+    if (name   !== undefined) { fields.push(`name = $${i++}`);   values.push(name.trim()); }
+    if (role   !== undefined) { fields.push(`role = $${i++}`);   values.push(role); }
     if (active !== undefined) { fields.push(`active = $${i++}`); values.push(active); }
-    fields.push(`updated_at = NOW()`);
-    values.push(parseInt(id));
+    fields.push("updated_at = NOW()");
+    values.push(userId);
 
-    const result = await pool.query(
+    const { rows } = await pool.query(
       `UPDATE users SET ${fields.join(", ")} WHERE id = $${i} RETURNING id, name, email, role, active`,
       values
     );
+    if (!rows.length) return res.status(404).json({ error: "Usuário não encontrado" });
 
-    if (!result.rows.length) {
-      return res.status(404).json({ error: "Usuário não encontrado" });
-    }
+    if (role) await setUserModules(userId, DEFAULT_PERMISSIONS[role]);
 
-    // Se mudou o perfil, ajusta permissões para o padrão do novo perfil
-    if (role) {
-      await setUserModules(parseInt(id), DEFAULT_PERMISSIONS[role]);
-    }
-
-    const modules = await getUserModules(parseInt(id));
-    res.json({ ...result.rows[0], modules });
+    const modules = await getUserModules(userId);
+    res.json({ ...rows[0], modules });
   } catch (err) {
     res.status(500).json({ error: "Erro ao editar usuário" });
   }
 });
 
-// ─── PUT /admin/users/:id/modules — define módulos do usuário ────────────────
+// ─── PUT /admin/users/:id/modules — permissões individuais ───────────────────
 router.put("/users/:id/modules", async (req, res) => {
-  const { id }     = req.params;
+  const userId  = parseInt(req.params.id);
   const { modules } = req.body;
 
   if (!Array.isArray(modules)) {
-    return res.status(400).json({ error: "modules deve ser um array de strings" });
+    return res.status(400).json({ error: "modules deve ser um array" });
   }
-
-  // Valida que todos os módulos são válidos
   const invalid = modules.filter(m => !ALL_MODULES.includes(m));
   if (invalid.length > 0) {
     return res.status(400).json({ error: `Módulos inválidos: ${invalid.join(", ")}` });
   }
 
   try {
-    const user = await pool.query("SELECT id FROM users WHERE id = $1", [parseInt(id)]);
-    if (!user.rows.length) {
-      return res.status(404).json({ error: "Usuário não encontrado" });
-    }
+    const user = await pool.query("SELECT id FROM users WHERE id = $1", [userId]);
+    if (!user.rows.length) return res.status(404).json({ error: "Usuário não encontrado" });
 
-    await setUserModules(parseInt(id), modules);
-    res.json({ userId: parseInt(id), modules, message: "Permissões atualizadas" });
+    await setUserModules(userId, modules);
+    res.json({ userId, modules });
   } catch (err) {
     res.status(500).json({ error: "Erro ao atualizar permissões" });
   }
 });
 
-// ─── DELETE /admin/users/:id — remove usuário ────────────────────────────────
+// ─── DELETE /admin/users/:id ──────────────────────────────────────────────────
 router.delete("/users/:id", async (req, res) => {
-  const { id } = req.params;
-
-  if (parseInt(id) === req.user.id) {
+  const userId = parseInt(req.params.id);
+  if (userId === req.user.id) {
     return res.status(400).json({ error: "Você não pode remover sua própria conta" });
   }
-
   try {
-    const result = await pool.query(
-      "DELETE FROM users WHERE id = $1 RETURNING id, name",
-      [parseInt(id)]
+    const { rows } = await pool.query(
+      "DELETE FROM users WHERE id = $1 RETURNING name", [userId]
     );
-    if (!result.rows.length) {
-      return res.status(404).json({ error: "Usuário não encontrado" });
-    }
-    res.json({ message: `Usuário '${result.rows[0].name}' removido` });
+    if (!rows.length) return res.status(404).json({ error: "Usuário não encontrado" });
+    res.json({ message: `Usuário '${rows[0].name}' removido` });
   } catch (err) {
     res.status(500).json({ error: "Erro ao remover usuário" });
   }
 });
 
-// ─── GET /admin/modules — lista todos os módulos disponíveis ─────────────────
+// ─── GET /admin/modules ───────────────────────────────────────────────────────
 router.get("/modules", (req, res) => {
   res.json({ modules: ALL_MODULES, defaults: DEFAULT_PERMISSIONS });
 });
