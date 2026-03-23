@@ -427,6 +427,25 @@ function App() {
 
   const toastRef  = useRef(null);
   const isMobile  = useIsMobile();
+  useEffect(() => {
+    if (auth?.token) {
+      console.log("Sincronizando com a Neon via Northflank...");
+      apiCall("GET", "/data", null, auth.token)
+        .then(data => {
+          if (data) {
+            if (data.investments) setInvs(data.investments);
+            if (data.categories)  setCats(data.categories);
+            if (data.settings)    setSettings(data.settings);
+            if (data.deposits)    setDeps(data.deposits);
+            if (data.renda)       setRenda(data.renda);
+            // Salva no navegador para o próximo acesso ser mais rápido e offline
+            lsSave(data);
+          }
+        })
+        .catch(err => console.error("Erro na sincronização:", err));
+    }
+  }, [auth]);
+  // ----------------------------------
 
   // ── Valores derivados ─────────────────────────────────────────────────────────
   const isLoggedIn  = !!auth?.token;
