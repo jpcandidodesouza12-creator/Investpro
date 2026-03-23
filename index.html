@@ -472,9 +472,19 @@ function App() {
   }
 
   const save = useCallback((i, c, s, d, ni, nc, nd, q, r) => {
-    lsSave({ investments:i, categories:c, settings:s, deposits:d, nii:ni, nci:nc, ndi:nd, quotes:q, renda:r });
+    const data = { investments:i, categories:c, settings:s, deposits:d, nii:ni, nci:nc, ndi:nd, quotes:q, renda:r };
+    
+    // 1. Salva no navegador atual
+    lsSave(data);
     setSnaps(lsLoadSnaps());
-  }, []);
+
+    // 2. Envia para o Banco Neon (NUVEM)
+    if (auth?.token) {
+      apiCall("POST", "/data", data, auth.token)
+        .then(() => console.log("✓ Backup na Neon atualizado com sucesso"))
+        .catch(err => console.error("✗ Falha ao salvar na nuvem:", err));
+    }
+  }, [auth]); // <--- Importante o [auth] aqui para ele ter o token
 
   const toast_ = useCallback((msg, ok=true) => {
     setToast({ msg, ok });
