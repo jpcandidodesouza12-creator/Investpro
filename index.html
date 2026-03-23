@@ -1,0 +1,3158 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>InvestPro</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prop-types@15/prop-types.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#090909;color:#fff;font-family:sans-serif}
+    #loading{position:fixed;inset:0;background:#090909;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;color:#F5C518;font-family:monospace;font-size:14px;z-index:9999}
+    .spinner{width:36px;height:36px;border:3px solid #222;border-top-color:#F5C518;border-radius:50%;animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <div id="loading"><div class="spinner"></div><span>🪙 Carregando InvestPro...</span></div>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react,env">
+const { useState, useMemo, useEffect, useCallback, useRef } = React;
+const { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } = Recharts;
+
+// ─── Responsive ───────────────────────────────────────────────────────────────
+function useIsMobile() {
+  const [v, set] = useState(false);
+  useEffect(() => {
+    const fn = () => set(window.innerWidth < 768);
+    fn();
+    window.addEventListener("resize", fn);
+    return () => window.removeEventListener("resize", fn);
+  }, []);
+  return v;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+const LS_KEY    = "investpro_v6";
+const LS_AUTH   = "investpro_auth";
+
+// ─── Backend URL — troque pela URL do Railway após o deploy ───────────────────
+const API_URL   = "https://investpro-backend-production-d06b.up.railway.app";
+
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+function authLoad() {
+  try { const r = localStorage.getItem(LS_AUTH); return r ? JSON.parse(r) : null; }
+  catch (_) { return null; }
+}
+function authSave(data) {
+  try { localStorage.setItem(LS_AUTH, JSON.stringify(data)); } catch (_) {}
+}
+function authClear() {
+  try { localStorage.removeItem(LS_AUTH); } catch (_) {}
+}
+
+async function apiCall(method, path, body, token) {
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  const opts = {
+    method,
+    headers: { "Content-Type": "application/json" },
+  };
+  if (token) opts.headers["Authorization"] = `Bearer ${token}`;
+  if (body)  opts.body = JSON.stringify(body);
+  const res  = await fetch(`${API_URL}${cleanPath}`, opts);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Erro ${res.status}`);
+  return data;
+}
+const CDI_ATUAL = 14.51;
+const CDI_REF   = "20/03/2026";
+const FX_DEFAULT = { USD: 5.72, EUR: 6.21 };
+
+const DEFAULT_SETTINGS = {
+  cdiRate: CDI_ATUAL,
+  fx: FX_DEFAULT,
+  meta: { ativa: false, valor: 100000, prazo: 24 },
+};
+
+const TYPES = [
+  { id: "cdb",      label: "CDB",       icon: "🏦", color: "#F5C518", ir: true,  intl: false },
+  { id: "lci",      label: "LCI/LCA",   icon: "🌾", color: "#ffffff", ir: false, intl: false },
+  { id: "tesouro",  label: "Tesouro",   icon: "🏛️", color: "#aaaaaa", ir: true,  intl: false },
+  { id: "bolsa",    label: "Bolsa BR",  icon: "📈", color: "#F5C518", ir: false, intl: false },
+  { id: "fii",      label: "FII",       icon: "🏢", color: "#e2a07e", ir: false, intl: false },
+  { id: "crypto",   label: "Crypto",    icon: "₿",  color: "#f7931a", ir: false, intl: false },
+  { id: "stocks_us",label: "Ações EUA", icon: "🇺🇸", color: "#60a5fa", ir: false, intl: true, currency: "USD" },
+  { id: "etf_us",   label: "ETF EUA",   icon: "📊", color: "#34d399", ir: false, intl: true, currency: "USD" },
+  { id: "etf_eu",   label: "ETF EUR",   icon: "🇪🇺", color: "#a78bfa", ir: false, intl: true, currency: "EUR" },
+  { id: "outro",    label: "Outro",     icon: "📦", color: "#9a9a9a", ir: false, intl: false },
+];
+
+// ─── SVG Icons ────────────────────────────────────────────────────────────────
+const ICONS = {
+  dashboard:   `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="7" height="7" rx="1.5"/><rect x="11" y="2" width="7" height="7" rx="1.5"/><rect x="2" y="11" width="7" height="7" rx="1.5"/><rect x="11" y="11" width="7" height="7" rx="1.5"/></svg>`,
+  investments: `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,14 7,9 11,12 18,5"/><polyline points="13,5 18,5 18,10"/></svg>`,
+  renda:       `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="16" height="11" rx="2"/><path d="M6 5V4a2 2 0 014 0v1"/><circle cx="10" cy="11" r="2"/></svg>`,
+  history:     `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="8"/><polyline points="10,6 10,10 13,12"/></svg>`,
+  comparator:  `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="10" y1="2" x2="10" y2="18"/><path d="M4 6h4l-2-3-2 3z" fill="currentColor"/><path d="M12 14h4l-2 3-2-3z" fill="currentColor"/></svg>`,
+  projection:  `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 16 C5 16 6 8 9 8 C12 8 11 12 14 10 C17 8 18 4 18 4"/><line x1="2" y1="18" x2="18" y2="18"/></svg>`,
+  quotes:      `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M2 5h16M2 9h10M2 13h7"/><circle cx="15" cy="14" r="4"/><line x1="18" y1="17" x2="20" y2="19"/></svg>`,
+  categories:  `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l7-5 7 5v10a1 1 0 01-1 1H4a1 1 0 01-1-1z"/><polyline points="8,18 8,12 12,12 12,18"/></svg>`,
+  settings:    `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="3"/><path d="M10 1v2M10 17v2M1 10h2M17 10h2M3.2 3.2l1.4 1.4M15.4 15.4l1.4 1.4M3.2 16.8l1.4-1.4M15.4 4.6l1.4-1.4"/></svg>`,
+  menu:        `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="5" x2="17" y2="5"/><line x1="3" y1="10" x2="17" y2="10"/><line x1="3" y1="15" x2="17" y2="15"/></svg>`,
+  close:       `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="4" y1="4" x2="16" y2="16"/><line x1="16" y1="4" x2="4" y2="16"/></svg>`,
+  plus:        `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="10" y1="3" x2="10" y2="17"/><line x1="3" y1="10" x2="17" y2="10"/></svg>`,
+  edit:        `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4l4 4-9 9H3v-4z"/><line x1="10" y1="6" x2="14" y2="10"/></svg>`,
+  trash:       `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="5,6 6,18 14,18 15,6"/><line x1="3" y1="6" x2="17" y2="6"/><path d="M8 6V4h4v2"/></svg>`,
+  coin:        `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="10" cy="10" r="8"/><path d="M10 6v8M7.5 7.5h4a1.5 1.5 0 010 3H9a1.5 1.5 0 000 3h4.5" stroke-linecap="round"/></svg>`,
+  alert:       `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2L2 17h16z"/><line x1="10" y1="9" x2="10" y2="12"/><circle cx="10" cy="15" r=".5" fill="currentColor"/></svg>`,
+  deposit:     `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="8"/><line x1="10" y1="6" x2="10" y2="14"/><line x1="6" y1="10" x2="14" y2="10"/></svg>`,
+  download:    `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v10M6 9l4 4 4-4"/><path d="M3 15v2h14v-2"/></svg>`,
+  upload:      `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13V3M6 7l4-4 4 4"/><path d="M3 15v2h14v-2"/></svg>`,
+  refresh:     `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 10a7 7 0 11-1.4-4.2"/><polyline points="17,3 17,8 12,8"/></svg>`,
+  restore:     `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10a7 7 0 101.4-4.2"/><polyline points="3,3 3,8 8,8"/></svg>`,
+};
+
+function Icon({ name, size=16, style={} }) {
+  const svg = ICONS[name];
+  if (!svg) return null;
+  return <span style={{ display:"inline-flex", alignItems:"center", justifyContent:"center", width:size, height:size, flexShrink:0, ...style }} dangerouslySetInnerHTML={{ __html: svg }} />;
+}
+
+const NAV = [
+  { id: "dashboard",   label: "Dashboard",    icon: "dashboard"   },
+  { id: "investments", label: "Investimentos", icon: "investments" },
+  { id: "renda",       label: "Minha Renda",  icon: "renda"       },
+  { id: "history",     label: "Aportes",       icon: "history"     },
+  { id: "comparator",  label: "Comparador",    icon: "comparator"  },
+  { id: "projection",  label: "Projeção",      icon: "projection"  },
+  { id: "quotes",      label: "Cotações",      icon: "quotes"      },
+  { id: "categories",  label: "Categorias",    icon: "categories"  },
+  { id: "settings",    label: "Config.",       icon: "settings"    },
+  { id: "admin",       label: "Admin",         icon: "alert"       },
+];
+
+// ─── Minha Renda — constants ──────────────────────────────────────────────────
+const MESES = ["Janeiro","Fevereiro","Março","Abril","Maio","Junho","Julho","Agosto","Setembro","Outubro","Novembro","Dezembro"];
+
+const DEF_RENDA_CATS = [
+  { id:1,  nome:"Consórcio Casa",  icone:"🏠" },
+  { id:2,  nome:"Consórcio 80k",   icone:"🏗️" },
+  { id:3,  nome:"Consórcio 20k",   icone:"🏗️" },
+  { id:4,  nome:"Aluguel",         icone:"🏠" },
+  { id:5,  nome:"Internet",        icone:"🌐" },
+  { id:6,  nome:"Energia",         icone:"⚡" },
+  { id:7,  nome:"Água",            icone:"💧" },
+  { id:8,  nome:"Claro",           icone:"📱" },
+  { id:9,  nome:"Plano odonto",    icone:"🦷" },
+  { id:10, nome:"Plano petlove",   icone:"🐾" },
+  { id:11, nome:"MEI",             icone:"💼" },
+  { id:12, nome:"Inter",           icone:"💳" },
+  { id:13, nome:"C6",              icone:"💳" },
+  { id:14, nome:"Mercado pago",    icone:"💳" },
+  { id:15, nome:"Nubank",          icone:"💳" },
+  { id:16, nome:"Itaú",            icone:"💳" },
+  { id:17, nome:"Supermercado",    icone:"🛒" },
+  { id:18, nome:"Outros",          icone:"📦" },
+];
+
+// Default monthly gastos (previstos) based on the spreadsheet
+const DEF_RENDA_GASTOS_PREV = {
+  1:0, 2:496, 3:201, 4:1000, 5:100, 6:240, 7:120, 8:40,
+  9:35, 10:34, 11:86, 12:800, 13:3700, 14:90, 15:0, 16:0, 17:0, 18:0
+};
+
+function defRendaMes() {
+  return {
+    receitas: { salario: 9900, freelance: 0, outros: 200 },
+    gastos: DEF_RENDA_CATS.map(c => ({ catId:c.id, previsto: DEF_RENDA_GASTOS_PREV[c.id]||0, real:0 })),
+  };
+}
+
+function defRenda() {
+  const r = {};
+  MESES.forEach((_, i) => { r[i] = defRendaMes(); });
+  return r;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function getType(id) { return TYPES.find(t => t.id === id) || TYPES[TYPES.length - 1]; }
+
+function irAliquota(dias) {
+  if (dias <= 180) return 0.225;
+  if (dias <= 360) return 0.200;
+  if (dias <= 720) return 0.175;
+  return 0.15;
+}
+function irLabel(dias) {
+  if (dias <= 180) return "22,5%";
+  if (dias <= 360) return "20,0%";
+  if (dias <= 720) return "17,5%";
+  return "15,0%";
+}
+
+function getIRAlert(inv) {
+  const dias = Math.round((Date.now() - new Date(inv.data + "T12:00:00").getTime()) / 86400000);
+  const bands = [[160, 180, "22,5%", "20,0%"], [340, 360, "20,0%", "17,5%"], [700, 720, "17,5%", "15,0%"]];
+  for (const [s, e, from, to] of bands) {
+    if (dias >= s && dias < e) {
+      return { faixa: from, proxima: to, diasRestantes: e - dias, urgente: dias >= s + 15 };
+    }
+  }
+  return null;
+}
+
+function getVencAlert(inv) {
+  if (!inv.vencimento) return null;
+  const dias = Math.round((new Date(inv.vencimento + "T12:00:00").getTime() - Date.now()) / 86400000);
+  if (dias < 0)   return { label: "Vencido",   dias: Math.abs(dias), cor: "#e27e7e", urgente: true  };
+  if (dias <= 30) return { label: `${dias}d`,  dias, cor: "#e27e9a", urgente: true  };
+  if (dias <= 90) return { label: `${dias}d`,  dias, cor: "#e2c97e", urgente: false };
+  return null;
+}
+
+function addMonths(date, n) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + n);
+  return d;
+}
+
+function calcMonths(inv, cdiRate, fx) {
+  const t      = getType(inv.tipo);
+  const annual = t.intl ? (inv.pct / 100) : ((cdiRate * (inv.pct || 100)) / 10000);
+  const mo     = Math.pow(1 + annual, 1 / 12) - 1;
+  const start  = new Date(inv.data + "T12:00:00");
+  const today  = new Date();
+  const past   = Math.max(0,
+    (today.getFullYear() - start.getFullYear()) * 12 + today.getMonth() - start.getMonth()
+  );
+  const fxRate  = t.currency ? (fx[t.currency] || 1) : 1;
+  const valBRL  = inv.valor * fxRate;
+
+  return Array.from({ length: 24 }, (_, i) => {
+    const fd       = addMonths(today, i + 1);
+    const dtot     = Math.round((fd - start) / 86400000);
+    const aliq     = t.ir ? irAliquota(dtot) : 0;
+    const saldo    = valBRL * Math.pow(1 + mo, past + i + 1);
+    const rb       = saldo - valBRL;
+    const ir       = rb * aliq;
+    const rl       = rb - ir;
+    return {
+      mes:          fd.toLocaleDateString("pt-BR", { month: "short", year: "numeric" }),
+      saldo,        rendimento: rb,
+      ir,           aliquotaLabel: irLabel(dtot),
+      saldoLiquido: valBRL + rl,
+      rendLiquido:  rl,
+    };
+  });
+}
+
+// ─── Formatters ───────────────────────────────────────────────────────────────
+const fmt  = v => new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v);
+const fmtP = v => v.toFixed(2).replace(".", ",") + "%";
+const fmtS = v => v >= 1e6 ? `R$${(v/1e6).toFixed(1)}M` : v >= 1e3 ? `R$${(v/1e3).toFixed(1)}k` : `R$${v.toFixed(0)}`;
+const fmtD = s => s ? new Date(s + "T12:00:00").toLocaleDateString("pt-BR") : "—";
+const fmtFX = (v, cur) => cur === "USD" ? `US$ ${v.toFixed(2)}` : `€ ${v.toFixed(2)}`;
+
+// ─── Storage ──────────────────────────────────────────────────────────────────
+const LS_SNAPS = "investpro_snaps_v1";
+const MAX_SNAPS = 10;
+
+function lsLoad() {
+  try { const r = localStorage.getItem(LS_KEY); return r ? JSON.parse(r) : null; }
+  catch (_) { return null; }
+}
+
+function lsSave(d) {
+  try {
+    // Before overwriting, snapshot the current state
+    const current = localStorage.getItem(LS_KEY);
+    if (current) {
+      try {
+        const snaps = JSON.parse(localStorage.getItem(LS_SNAPS) || "[]");
+        const cur   = JSON.parse(current);
+        const label = cur.investments
+          ? `${cur.investments.length} ativo${cur.investments.length!==1?"s":""}`
+          : "snapshot";
+        snaps.unshift({
+          ts:      Date.now(),
+          label,
+          data:    current,
+        });
+        localStorage.setItem(LS_SNAPS, JSON.stringify(snaps.slice(0, MAX_SNAPS)));
+      } catch (_) {}
+    }
+    localStorage.setItem(LS_KEY, JSON.stringify(d));
+  } catch (_) {}
+}
+
+function lsLoadSnaps() {
+  try { return JSON.parse(localStorage.getItem(LS_SNAPS) || "[]"); }
+  catch (_) { return []; }
+}
+
+function lsRestoreSnap(snapData) {
+  try {
+    // Snapshot current state before restoring
+    const current = localStorage.getItem(LS_KEY);
+    if (current) {
+      const snaps = lsLoadSnaps();
+      const cur   = JSON.parse(current);
+      snaps.unshift({ ts: Date.now(), label: `(antes do restore) ${cur.investments?.length||0} ativos`, data: current });
+      localStorage.setItem(LS_SNAPS, JSON.stringify(snaps.slice(0, MAX_SNAPS)));
+    }
+    localStorage.setItem(LS_KEY, snapData);
+    return JSON.parse(snapData);
+  } catch (_) { return null; }
+}
+
+// ─── Export / Import ──────────────────────────────────────────────────────────
+function doExportJSON(investments, categories, settings, deposits) {
+  const b = new Blob([JSON.stringify({ investments, categories, settings, deposits }, null, 2)], { type: "application/json" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(b), download: `investpro_${Date.now()}.json` });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function doExportCSV(investments) {
+  const rows = ["id,nome,tipo,valor,pct,data,vencimento,categoriaId",
+    ...investments.map(i => `${i.id},"${i.nome}",${i.tipo},${i.valor},${i.pct},${i.data},${i.vencimento||""},${i.categoriaId||""}`)];
+  const b = new Blob([rows.join("\n")], { type: "text/csv" });
+  const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(b), download: `investpro_${Date.now()}.csv` });
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function parseImport(text, isCSV) {
+  if (isCSV) {
+    const rows = text.trim().split("\n").slice(1);
+    const investments = rows.map((l, i) => {
+      const c = l.split(",");
+      return { id: parseInt(c[0]) || i+1, nome: (c[1]||"").replace(/"/g,""), tipo: c[2]||"cdb", valor: parseFloat(c[3])||0, pct: parseFloat(c[4])||100, data: c[5]||"2024-01-01", vencimento: c[6]||null, categoriaId: c[7] ? parseInt(c[7]) : null };
+    });
+    return { investments };
+  }
+  const d = JSON.parse(text);
+  if (!Array.isArray(d.investments)) throw new Error("Invalid");
+  return d;
+}
+
+// ─── Defaults ─────────────────────────────────────────────────────────────────
+const DEF_CATS = [
+  { id:1, nome:"Renda Fixa",     cor:"#e2c97e" },
+  { id:2, nome:"Renda Variável", cor:"#b77ee2" },
+  { id:3, nome:"Reserva",        cor:"#7ecfb3" },
+];
+const DEF_INVS = [
+  { id:1, nome:"CDB Nubank", tipo:"cdb", valor:10000, pct:100, data:"2024-09-01", vencimento:"2026-09-01", categoriaId:1 },
+  { id:2, nome:"LCI Inter",  tipo:"lci", valor:5000,  pct:95,  data:"2024-06-15", vencimento:null,        categoriaId:3 },
+];
+
+// ─── Quotes ───────────────────────────────────────────────────────────────────
+const DEF_WATCHLIST = {
+  currencies: ["USD", "EUR", "GBP", "ARS", "JPY"],
+  br:         ["PETR4", "VALE3", "ITUB4", "BBDC4", "MGLU3"],
+  us:         ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"],
+  crypto:     ["BTC", "ETH", "SOL", "BNB"],
+};
+const DEF_QUOTES = {
+  watchlist: DEF_WATCHLIST,
+  data: { currencies:{}, br:{}, us:{}, crypto:{} },
+  updatedAt: null,
+};
+
+async function fetchAllQuotes(watchlist, apiKey) {
+  if (!apiKey || !apiKey.trim()) throw new Error("Chave de API não configurada. Vá em Configurações → Chave da API Anthropic.");
+
+  const currencies = (watchlist.currencies || []).join(", ");
+  const br         = (watchlist.br         || []).join(", ");
+  const us         = (watchlist.us         || []).join(", ");
+  const crypto     = (watchlist.crypto     || []).join(", ");
+  const today      = new Date().toLocaleDateString("pt-BR");
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey.trim(),
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true",
+      },
+      body: JSON.stringify({
+        model: "claude-3-5-sonnet-20240620",
+        max_tokens: 2048,
+        system: "Você é um assistente financeiro. Responda APENAS com JSON válido, sem markdown, sem texto adicional.",
+        messages: [{
+          role: "user",
+          content: `Data: ${today}. Forneça cotações recentes e a taxa CDI atual do Brasil (% ao ano).
+Retorne SOMENTE este JSON (substitua pelos valores reais):
+{"cdi":14.75,"currencies":{"USD":{"price":5.72,"change":0.03,"changePct":0.52}},"br":{"PETR4":{"price":38.5,"change":-0.2,"changePct":-0.51}},"us":{"AAPL":{"price":175.3,"change":1.2,"changePct":0.69}},"crypto":{"BTC":{"price":85000,"change":1200,"changePct":1.43}}}
+Ativos: moedas BRL (${currencies}), ações BR (${br}), ações EUA USD (${us}), crypto USD (${crypto}). Use null se não encontrar.`,
+        }],
+      }),
+    });
+
+    const rawText = await res.text();
+
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} — ${rawText.substring(0, 200)}`);
+    }
+
+    // Extrai o texto da resposta da API
+    const resp    = JSON.parse(rawText);
+    const allText = (resp.content || [])
+      .filter(b => b.type === "text")
+      .map(b => b.text || "")
+      .join("\n");
+
+    if (!allText.trim()) {
+      throw new Error(`Resposta vazia. stop_reason: ${resp.stop_reason}`);
+    }
+
+    // Estratégia 1: JSON direto no texto
+    const s = allText.indexOf("{");
+    const e = allText.lastIndexOf("}");
+    if (s !== -1 && e > s) {
+      try {
+        const parsed = JSON.parse(allText.slice(s, e + 1));
+        if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
+      } catch (_) { /* tenta próxima */ }
+    }
+
+    // Estratégia 2: bloco markdown ```json ... ```
+    const md = allText.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (md) {
+      try {
+        const parsed = JSON.parse(md[1].trim());
+        if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
+      } catch (_) { /* falha abaixo */ }
+    }
+
+    throw new Error(`JSON não encontrado na resposta: "${allText.substring(0, 150).replace(/\n/g, " ")}"`);
+
+  } catch (err) {
+    throw new Error(err.message || "Erro de rede ao buscar cotações.");
+  }
+}
+
+// ─── Tooltip ──────────────────────────────────────────────────────────────────
+const TIP_S = { background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, padding:"10px 14px", fontFamily:"IBM Plex Mono,monospace", fontSize:11 };
+const TIP_H = { color:"#c9bfaa", fontWeight:600, marginBottom:6, borderBottom:"1px solid #1e1c16", paddingBottom:4 };
+
+function ChartTip({ active, payload, label }) {
+  if (!active || !payload || !payload.length) return null;
+  return (
+    <div style={TIP_S}>
+      <div style={TIP_H}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ display:"flex", justifyContent:"space-between", gap:12, marginBottom:2 }}>
+          <span style={{ color:"#6a6458" }}>{p.dataKey || p.name}</span>
+          <span style={{ color: p.stroke || p.fill, fontWeight:600 }}>{fmt(p.value)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APP
+// ═══════════════════════════════════════════════════════════════════════════════
+function App() {
+  // ── Auth ─────────────────────────────────────────────────────────────────────
+  // TODOS os hooks devem ser declarados aqui — antes de qualquer return condicional
+  const [auth, setAuth] = useState(() => authLoad());
+
+  // ── App state ─────────────────────────────────────────────────────────────────
+  // Inicializador lazy: lsLoad() só é chamado uma vez, não a cada render
+  const [invs,     setInvs]     = useState(() => { const s = lsLoad(); return s?.investments ?? DEF_INVS; });
+  const [cats,     setCats]     = useState(() => { const s = lsLoad(); return s?.categories  ?? DEF_CATS; });
+  const [settings, setSettings] = useState(() => { const s = lsLoad(); return s?.settings    ?? DEFAULT_SETTINGS; });
+  const [deps,     setDeps]     = useState(() => { const s = lsLoad(); return s?.deposits     ?? []; });
+  const [nii,      setNii]      = useState(() => { const s = lsLoad(); return s?.nii          ?? 3; });
+  const [nci,      setNci]      = useState(() => { const s = lsLoad(); return s?.nci          ?? 4; });
+  const [ndi,      setNdi]      = useState(() => { const s = lsLoad(); return s?.ndi          ?? 1; });
+  const [quotes,   setQuotes]   = useState(() => { const s = lsLoad(); return s?.quotes       ?? DEF_QUOTES; });
+  const [renda,    setRenda]    = useState(() => { const s = lsLoad(); return s?.renda        ?? defRenda(); });
+  const [snaps,    setSnaps]    = useState(() => lsLoadSnaps());
+  const [apiKey,   setApiKey_]  = useState(() => { try { return localStorage.getItem("investpro_apikey") || ""; } catch(_) { return ""; } });
+  const [screen,   setScreen]   = useState("dashboard");
+  const [sideOpen, setSideOpen] = useState(true);
+  const [modal,    setModal]    = useState(null);
+  const [toast,    setToast]    = useState(null);
+  const [qLoading, setQLoading] = useState(false);
+
+  const toastRef  = useRef(null);
+  const isMobile  = useIsMobile();
+
+  // ── Valores derivados ─────────────────────────────────────────────────────────
+  const isLoggedIn  = !!auth?.token;
+  const userRole    = auth?.user?.role || "guest";
+  const userModules = auth?.modules    || [];
+  const isAdmin     = userRole === "admin";
+  const fx          = settings.fx || FX_DEFAULT;
+
+  // ── Auth handlers ─────────────────────────────────────────────────────────────
+  function handleLogin(data) {
+    authSave(data);
+    setAuth(data);
+  }
+
+  async function handleLogout() {
+    try { await apiCall("POST", "/auth/logout", null, auth?.token); } catch (_) {}
+    authClear();
+    setAuth(null);
+  }
+
+  // ── Renderização condicional — após todos os hooks ────────────────────────────
+  if (!isLoggedIn) {
+    return <ScreenLogin onLogin={handleLogin} />;
+  }
+
+  const save = useCallback((i, c, s, d, ni, nc, nd, q, r) => {
+    lsSave({ investments:i, categories:c, settings:s, deposits:d, nii:ni, nci:nc, ndi:nd, quotes:q, renda:r });
+    setSnaps(lsLoadSnaps());
+  }, []);
+
+  const toast_ = useCallback((msg, ok=true) => {
+    setToast({ msg, ok });
+    clearTimeout(toastRef.current);
+    toastRef.current = setTimeout(() => setToast(null), 2800);
+  }, []);
+
+  const projs = useMemo(() =>
+    invs.map(inv => ({ ...inv, months: calcMonths(inv, settings.cdiRate, fx) })),
+    [invs, settings.cdiRate, fx]
+  );
+
+  const cons = useMemo(() => {
+    if (!projs.length) return [];
+    return Array.from({ length: 24 }, (_, i) => ({
+      mes:          projs[0].months[i].mes,
+      saldo:        projs.reduce((a,c) => a + c.months[i].saldo, 0),
+      rendimento:   projs.reduce((a,c) => a + c.months[i].rendimento, 0),
+      ir:           projs.reduce((a,c) => a + c.months[i].ir, 0),
+      saldoLiquido: projs.reduce((a,c) => a + c.months[i].saldoLiquido, 0),
+      rendLiquido:  projs.reduce((a,c) => a + c.months[i].rendLiquido, 0),
+    }));
+  }, [projs]);
+
+  const totalInv = invs.reduce((a, c) => {
+    const t = getType(c.tipo);
+    return a + c.valor * (t.currency ? (fx[t.currency] || 1) : 1);
+  }, 0);
+
+  const irAlerts   = useMemo(() => invs.map(i => ({ inv:i, a:getIRAlert(i) })).filter(x => x.a),   [invs]);
+  const vencAlerts = useMemo(() => invs.map(i => ({ inv:i, a:getVencAlert(i) })).filter(x => x.a), [invs]);
+  const urgent     = [...irAlerts.filter(x => x.a?.urgente), ...vencAlerts.filter(x => x.a?.urgente)];
+
+  // ── Handlers ────────────────────────────────────────────────────────────────
+  function saveInv(form) {
+    const v = parseFloat(String(form.valor).replace(",", "."));
+    const p = parseFloat(String(form.pct).replace(",", "."));
+    if (!form.nome?.trim() || isNaN(v) || v <= 0 || isNaN(p) || p <= 0 || !form.data || !form.tipo) {
+      toast_("Preencha todos os campos.", false); return;
+    }
+    const obj = { nome:form.nome.trim(), tipo:form.tipo, valor:v, pct:p, data:form.data, vencimento:form.vencimento||null, categoriaId:form.categoriaId||null };
+    let newInvs, newNii = nii;
+    if (!form.id) { newInvs = [...invs, { id:nii, ...obj }]; newNii++; }
+    else          { newInvs = invs.map(i => i.id === form.id ? { ...i, ...obj } : i); }
+    setInvs(newInvs); setNii(newNii); setModal(null);
+    save(newInvs, cats, settings, deps, newNii, nci, ndi, quotes, renda);
+    toast_("✓ Investimento salvo");
+  }
+
+  function delInv(id) {
+    const n = invs.filter(i => i.id !== id);
+    setInvs(n); save(n, cats, settings, deps, nii, nci, ndi, quotes);
+    toast_("✓ Removido");
+  }
+
+  function saveDep(form) {
+    const v = parseFloat(String(form.valor).replace(",", "."));
+    if (!form.invId || isNaN(v) || v <= 0 || !form.data) { toast_("Preencha todos os campos.", false); return; }
+    const newDeps = [...deps, { id:ndi, invId:form.invId, valor:v, data:form.data, obs:form.obs||"" }];
+    const newInvs = invs.map(i => i.id === form.invId ? { ...i, valor:i.valor+v } : i);
+    const newNdi  = ndi + 1;
+    setDeps(newDeps); setInvs(newInvs); setNdi(newNdi); setModal(null);
+    save(newInvs, cats, settings, newDeps, nii, nci, newNdi, quotes, renda);
+    toast_("✓ Aporte registrado");
+  }
+
+  function delDep(id) {
+    const d = deps.find(x => x.id === id);
+    if (!d) return;
+    const newDeps = deps.filter(x => x.id !== id);
+    const newInvs = invs.map(i => i.id === d.invId ? { ...i, valor:Math.max(0, i.valor-d.valor) } : i);
+    setDeps(newDeps); setInvs(newInvs);
+    save(newInvs, cats, settings, newDeps, nii, nci, ndi, quotes, renda);
+    toast_("✓ Aporte removido");
+  }
+
+  function saveCat(form) {
+    if (!form.nome?.trim()) { toast_("Nome obrigatório.", false); return; }
+    let newCats, newNci = nci;
+    if (!form.id) { newCats = [...cats, { id:nci, nome:form.nome.trim(), cor:form.cor||"#7ecfb3" }]; newNci++; }
+    else          { newCats = cats.map(c => c.id === form.id ? { ...c, nome:form.nome.trim(), cor:form.cor } : c); }
+    setCats(newCats); setNci(newNci); setModal(null);
+    save(invs, newCats, settings, deps, nii, newNci, ndi, quotes, renda);
+    toast_("✓ Categoria salva");
+  }
+
+  function delCat(id) {
+    const newCats = cats.filter(c => c.id !== id);
+    const newInvs = invs.map(i => i.categoriaId === id ? { ...i, categoriaId:null } : i);
+    setCats(newCats); setInvs(newInvs);
+    save(newInvs, newCats, settings, deps, nii, nci, ndi, quotes, renda);
+    toast_("✓ Categoria removida");
+  }
+
+  function saveSettings(s) {
+    setSettings(s); save(invs, cats, s, deps, nii, nci, ndi, quotes, renda);
+    toast_("✓ Configurações salvas");
+  }
+
+  function restoreSnap(snap) {
+    const restored = lsRestoreSnap(snap.data);
+    if (!restored) { toast_("✗ Erro ao restaurar versão.", false); return; }
+    setInvs(restored.investments   ?? []);
+    setCats(restored.categories    ?? DEF_CATS);
+    setSettings(restored.settings  ?? DEFAULT_SETTINGS);
+    setDeps(restored.deposits      ?? []);
+    setNii(restored.nii            ?? 1);
+    setNci(restored.nci            ?? 1);
+    setNdi(restored.ndi            ?? 1);
+    setQuotes(restored.quotes      ?? DEF_QUOTES);
+    setSnaps(lsLoadSnaps());
+    toast_(`✓ Versão de ${new Date(snap.ts).toLocaleString("pt-BR")} restaurada`);
+  }
+
+  function saveApiKey(key) {
+    try { localStorage.setItem("investpro_apikey", key); } catch(_) {}
+    setApiKey_(key);
+    toast_("✓ Chave de API salva");
+  }
+
+  async function fetchQuotes(watchlist) {
+    setQLoading(true);
+    try {
+      const data = await fetchAllQuotes(watchlist, apiKey);
+      const now  = new Date().toLocaleString("pt-BR");
+      const newQ = { ...quotes, watchlist, data, updatedAt: now, error: null };
+      setQuotes(newQ);
+      // Sync USD/EUR and CDI to settings
+      const newFx = { ...settings.fx };
+      if (data.currencies?.USD?.price) newFx.USD = data.currencies.USD.price;
+      if (data.currencies?.EUR?.price) newFx.EUR = data.currencies.EUR.price;
+      const newSet = { ...settings, fx: newFx };
+      if (data.cdi && data.cdi > 0) newSet.cdiRate = data.cdi;
+      setSettings(newSet);
+      save(invs, cats, newSet, deps, nii, nci, ndi, newQ, renda);
+      const cdiMsg = data.cdi ? ` · CDI ${fmtP(data.cdi)}` : "";
+      toast_(`✓ Cotações atualizadas${cdiMsg} — ${now}`);
+    } catch (e) {
+      const msg = e.message || "Erro desconhecido";
+      const newQ = { ...quotes, watchlist, error: msg };
+      setQuotes(newQ);
+      save(invs, cats, settings, deps, nii, nci, ndi, newQ, renda);
+      toast_(`✗ ${msg.substring(0, 80)}`, false);
+    } finally {
+      setQLoading(false);
+    }
+  }
+
+  function updateWatchlist(section, tickers) {
+    const newQ = { ...quotes, watchlist: { ...quotes.watchlist, [section]: tickers } };
+    setQuotes(newQ);
+    save(invs, cats, settings, deps, nii, nci, ndi, newQ, renda);
+  }
+
+  function saveRenda(mesIdx, data) {
+    const newRenda = { ...renda, [mesIdx]: data };
+    setRenda(newRenda);
+    save(invs, cats, settings, deps, nii, nci, ndi, quotes, newRenda);
+  }
+
+  function doImport(data) {
+    const ni = data.investments || [];
+    const nc = data.categories  || cats;
+    const ns = data.settings    || settings;
+    const nd = data.deposits    || [];
+    const nii2 = ni.length ? Math.max(...ni.map(i=>i.id))+1 : 1;
+    const nci2 = nc.length ? Math.max(...nc.map(c=>c.id))+1 : 1;
+    const ndi2 = nd.length ? Math.max(...nd.map(d=>d.id))+1 : 1;
+    setInvs(ni); setCats(nc); setSettings(ns); setDeps(nd);
+    setNii(nii2); setNci(nci2); setNdi(ndi2);
+    save(ni, nc, ns, nd, nii2, nci2, ndi2, quotes, renda);
+    setModal(null);
+    toast_(`✓ ${ni.length} investimentos importados`);
+  }
+
+  // Filter nav items by user permissions
+  const visibleNav = isAdmin
+    ? NAV
+    : NAV.filter(item => userModules.includes(item.id));
+
+  const sp = { invs, cats, settings, projs, cons, totalInv, deps, fx, isMobile, quotes, snaps, apiKey, renda, auth, isAdmin, userModules };
+
+  return (
+    <div style={S.app}>
+      <style>{CSS}</style>
+
+      {toast && (
+        <div style={{ ...S.toast, bottom:isMobile?76:24, right:isMobile?12:24, left:isMobile?12:"auto", background:toast.ok?"#001a0a":"#1a0000", borderColor:toast.ok?"#00cc6644":"#cc000044", color:toast.ok?"#00cc66":"#ff6666" }}>
+          {toast.msg}
+        </div>
+      )}
+
+      {urgent.length > 0 && (
+        <AlertBanner urgent={urgent} />
+      )}
+
+      {!isMobile && (
+        <Sidebar sideOpen={sideOpen} setSideOpen={setSideOpen} screen={screen} setScreen={setScreen}
+          visibleNav={visibleNav} onLogout={handleLogout} user={auth?.user} />
+      )}
+
+      {isMobile && (
+        <>
+          <div style={S.mobileBar}>
+            <button style={{ ...S.hamburger, color:"#fff", background:"#1f1f1f", borderRadius:10, padding:"8px 10px", border:"1px solid #333" }} onClick={() => setSideOpen(o => !o)} aria-label="Menu">
+              <Icon name={sideOpen ? "close" : "menu"} size={20} />
+            </button>
+            <div style={{ display:"flex", alignItems:"center", gap:8, flex:1, justifyContent:"center" }}>
+              <span style={{ fontSize:20 }}>🪙</span>
+              <span style={{ ...S.logoText, fontSize:16 }}>InvestPro</span>
+            </div>
+            <span style={S.mobileCdi}>CDI {fmtP(settings.cdiRate)}</span>
+          </div>
+          {sideOpen && (
+            <div style={S.drawerOverlay} onClick={() => setSideOpen(false)}>
+              <nav style={S.drawer} onClick={e => e.stopPropagation()}>
+                <div style={S.drawerHeader}>
+                  <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                    <span style={{ fontSize:22 }}>🪙</span>
+                    <span style={{ fontSize:18, fontWeight:800, color:"#fff" }}>InvestPro</span>
+                  </div>
+                  <button style={{ ...S.hamburger, color:"#fff" }} onClick={() => setSideOpen(false)}>
+                    <Icon name="close" size={20} />
+                  </button>
+                </div>
+                {/* User info */}
+                <div style={{ padding:"12px 20px 8px", borderBottom:`1px solid ${T.border}` }}>
+                  <div style={{ fontSize:13, color:"#fff", fontWeight:600 }}>{auth?.user?.name}</div>
+                  <div style={{ fontSize:11, color:"#555", fontFamily:T.mono, marginTop:2 }}>{auth?.user?.email}</div>
+                  <div style={{ marginTop:6 }}><RoleBadge role={auth?.user?.role} /></div>
+                </div>
+                {visibleNav.map(item => (
+                  <button key={item.id}
+                    style={{ ...S.drawerItem, ...(screen===item.id ? S.drawerItemActive : {}) }}
+                    onClick={() => { setScreen(item.id); setSideOpen(false); }}>
+                    <Icon name={item.icon} size={18} />
+                    <span>{item.label}</span>
+                    {screen===item.id && <span style={S.drawerActiveDot} />}
+                  </button>
+                ))}
+                {/* Logout */}
+                <button style={{ ...S.drawerItem, marginTop:"auto", color:"#ef4444", borderTop:`1px solid ${T.border}` }}
+                  onClick={() => { setSideOpen(false); handleLogout(); }}>
+                  <Icon name="close" size={18} />
+                  <span>Sair</span>
+                </button>
+              </nav>
+            </div>
+          )}
+        </>
+      )}
+
+      <main style={{ ...S.main, marginLeft:isMobile?0:(sideOpen?240:68), padding:isMobile?"16px 14px 40px":"28px 36px 56px", marginTop:isMobile?56:0 }}>
+        {screen === "dashboard"   && <ScreenDashboard   {...sp} setScreen={setScreen} onAdd={() => setModal({t:"inv",d:{}})} irAlerts={irAlerts} vencAlerts={vencAlerts} />}
+        {screen === "investments" && <ScreenInvestments {...sp} onAdd={() => setModal({t:"inv",d:{}})} onEdit={inv => setModal({t:"inv",d:inv})} onDel={delInv} onDep={inv => setModal({t:"dep",d:{invId:inv.id}})} onExJSON={() => doExportJSON(invs,cats,settings,deps)} onExCSV={() => doExportCSV(invs)} onImport={() => setModal({t:"import"})} />}
+        {screen === "renda"       && <ScreenRenda       renda={renda} isMobile={isMobile} onSave={saveRenda} />}
+        {screen === "history"     && <ScreenHistory     {...sp} onAddDep={() => setModal({t:"dep",d:{}})} onDelDep={delDep} />}
+        {screen === "comparator"  && <ScreenComparator  {...sp} />}
+        {screen === "projection"  && <ScreenProjection  {...sp} />}
+        {screen === "quotes"      && <ScreenCotacoes    {...sp} onFetch={fetchQuotes} onUpdateWatchlist={updateWatchlist} qLoading={qLoading} />}
+        {screen === "categories"  && <ScreenCategories  {...sp} onAdd={() => setModal({t:"cat",d:{}})} onEdit={cat => setModal({t:"cat",d:cat})} onDel={delCat} />}
+        {screen === "settings"    && <ScreenSettings    {...sp} onSave={saveSettings} onRestore={restoreSnap} onSaveApiKey={saveApiKey} />}
+        {screen === "admin"       && isAdmin && <ScreenAdmin auth={auth} isMobile={isMobile} />}
+      </main>
+
+      {modal?.t === "inv"    && <InvModal    data={modal.d} cats={cats} isMobile={isMobile} onSave={saveInv}    onClose={() => setModal(null)} />}
+      {modal?.t === "cat"    && <CatModal    data={modal.d}             isMobile={isMobile} onSave={saveCat}    onClose={() => setModal(null)} />}
+      {modal?.t === "dep"    && <DepModal    data={modal.d} invs={invs} isMobile={isMobile} onSave={saveDep}    onClose={() => setModal(null)} />}
+      {modal?.t === "import" && <ImportModal                            isMobile={isMobile} onImport={doImport} onClose={() => setModal(null)} />}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIDEBAR
+// ═══════════════════════════════════════════════════════════════════════════════
+function Sidebar({ sideOpen, setSideOpen, screen, setScreen, visibleNav, onLogout, user }) {
+  return (
+    <aside style={{ ...S.sidebar, width:sideOpen?240:68 }}>
+      {/* Logo */}
+      <div style={S.sidebarLogo} onClick={() => setSideOpen(o => !o)}>
+        <div style={{ width:36, height:36, borderRadius:10, background:"#F5C518", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:20, lineHeight:1 }}>
+          🪙
+        </div>
+        {sideOpen && (
+          <>
+            <span style={S.logoText}>InvestPro</span>
+            <span style={{ marginLeft:"auto", color:"#555", flexShrink:0, display:"flex" }}>
+              <Icon name="close" size={14} />
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* User info */}
+      {sideOpen && user && (
+        <div style={{ padding:"12px 14px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
+          <div style={{ fontSize:13, fontWeight:600, color:"#fff", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{user.name}</div>
+          <div style={{ fontSize:10, color:"#555", fontFamily:T.mono, marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{user.email}</div>
+          <div style={{ marginTop:6 }}><RoleBadge role={user.role} /></div>
+        </div>
+      )}
+
+      {/* Nav */}
+      <nav style={S.nav}>
+        {(visibleNav || NAV).map(item => (
+          <button key={item.id}
+            style={{ ...S.navItem, ...(screen===item.id?S.navActive:{}), justifyContent:sideOpen?"flex-start":"center" }}
+            className={screen===item.id ? "" : "nav-hover"}
+            onClick={() => setScreen(item.id)}
+            title={!sideOpen ? item.label : undefined}>
+            <Icon name={item.icon} size={18} style={{ flexShrink:0 }} />
+            {sideOpen && <span style={{ fontSize:13, marginLeft:2 }}>{item.label}</span>}
+          </button>
+        ))}
+      </nav>
+
+      {/* Logout */}
+      <button
+        style={{ ...S.navItem, justifyContent:sideOpen?"flex-start":"center", color:"#ef4444", borderTop:`1px solid ${T.border}`, flexShrink:0, padding:"14px 11px" }}
+        className="nav-hover"
+        onClick={onLogout}
+        title={!sideOpen ? "Sair" : undefined}>
+        <Icon name="close" size={18} style={{ flexShrink:0 }} />
+        {sideOpen && <span style={{ fontSize:13, marginLeft:2 }}>Sair</span>}
+      </button>
+    </aside>
+  );
+}
+
+function SumRow({ label, value, color }) {
+  return (
+    <div style={{ marginTop:8 }}>
+      <div style={S.sl}>{label}</div>
+      <div style={{ ...S.sv, color }}>{value}</div>
+    </div>
+  );
+}
+
+function MetaBar({ pct }) {
+  return (
+    <div style={{ marginTop:8 }}>
+      <div style={S.sl}>Meta {pct.toFixed(0)}%</div>
+      <div style={{ height:4, background:"#1e1c16", borderRadius:2, marginTop:4 }}>
+        <div style={{ height:4, background:"#b77ee2", borderRadius:2, width:`${pct}%`, transition:"width .4s" }} />
+      </div>
+    </div>
+  );
+}
+
+function AlertBanner({ urgent }) {
+  const msgs = urgent.slice(0, 3).map(x => {
+    if (x.a?.proxima) return `IR ${x.inv.nome}: ${x.a.faixa}→${x.a.proxima} em ${x.a.diasRestantes}d`;
+    return `Venc. ${x.inv.nome}: ${x.a.label}`;
+  });
+  return (
+    <div style={S.alertBanner}>
+      <span>⚠️</span>
+      <span style={{ flex:1, fontSize:11 }}>{msgs.join(" · ")}</span>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCREENS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function ScreenDashboard({ invs, cats, settings, projs, cons, totalInv, deps, fx, isMobile, setScreen, onAdd, irAlerts, vencAlerts }) {
+  const last12  = cons[11];
+  const next1   = cons[0];
+  const meta    = settings.meta;
+  const metaPct = meta?.ativa && meta.valor > 0 ? Math.min(100, totalInv / meta.valor * 100) : null;
+
+  const byType = TYPES.map(t => ({
+    ...t,
+    value: invs.filter(i => i.tipo === t.id).reduce((a, c) => a + c.valor * (t.currency ? (fx[t.currency]||1) : 1), 0)
+  })).filter(t => t.value > 0);
+
+  const byCat = cats.map(cat => ({
+    name:  cat.nome,
+    color: cat.cor,
+    value: invs.filter(i => i.categoriaId === cat.id).reduce((a, c) => {
+      const t = getType(c.tipo);
+      return a + c.valor * (t.currency ? (fx[t.currency]||1) : 1);
+    }, 0),
+  })).filter(c => c.value > 0);
+
+  const areaData = cons.slice(0, 12).map(r => ({
+    mes:        r.mes.split(" ")[0],
+    "Líquido":  r.saldoLiquido,
+    "Bruto":    r.saldo,
+    "Principal": totalInv,
+  }));
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Dashboard" subtitle="Visão geral">
+        <Btn onClick={onAdd}>+ Novo</Btn>
+      </PageHeader>
+
+      <div style={P.kpiRow} className="kpi-row">
+        <KPI label="Total Investido"     value={fmt(totalInv)}                   color="#F5C518" icon="investments" />
+        <KPI label="Patrimônio 12m"      value={fmt(last12?.saldoLiquido ?? 0)}  color="#ffffff" icon="projection" />
+        <KPI label="IR estimado 12m"     value={fmt(last12?.ir ?? 0)}            color="#ff6666" icon="alert" />
+        <KPI label="Rend. próximo mês"   value={`+${fmt(next1?.rendLiquido ?? 0)}`} color="#aaaaaa" icon="quotes" />
+      </div>
+
+      {metaPct !== null && (
+        <div style={P.metaCard}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+            <span style={{ color:"#b77ee2", fontWeight:700, fontSize:13 }}>
+              🎯 Meta · <span style={{ color:"#6a6458", fontWeight:400, fontSize:11, fontFamily:"IBM Plex Mono,monospace" }}>{fmt(totalInv)} de {fmt(meta.valor)}</span>
+            </span>
+            <span style={{ color:"#b77ee2", fontWeight:800, fontFamily:"IBM Plex Mono,monospace" }}>{metaPct.toFixed(1)}%</span>
+          </div>
+          <div style={P.metaTrack}><div style={{ ...P.metaFill, width:`${metaPct}%` }} /></div>
+          <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, fontSize:10, color:"#4a4438", fontFamily:"IBM Plex Mono,monospace" }}>
+            <span>Faltam {fmt(Math.max(0, meta.valor - totalInv))}</span>
+            <span>Prazo: {meta.prazo}m</span>
+          </div>
+        </div>
+      )}
+
+      <div style={{ ...P.grid2, gridTemplateColumns:isMobile?"1fr":"1fr 1fr" }}>
+        <ChartCard title="Evolução Patrimonial — 12m">
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={areaData} margin={{ top:8, right:8, left:0, bottom:0 }}>
+              <defs>
+                {[["l","#7ecfb3"],["b","#e2c97e"],["p","#3a3020"]].map(([id, c]) => (
+                  <linearGradient key={id} id={`g${id}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stopColor={c} stopOpacity={0.3} />
+                    <stop offset="100%" stopColor={c} stopOpacity={0.02} />
+                  </linearGradient>
+                ))}
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" vertical={false} />
+              <XAxis dataKey="mes" tick={{ fill:"#6a6458", fontSize:10 }} axisLine={{ stroke:"#2a2820" }} tickLine={false} />
+              <YAxis tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} width={52} />
+              <Tooltip content={<ChartTip />} />
+              <Area type="monotone" dataKey="Principal" stroke="#4a4030" strokeWidth={1} fill="url(#gp)" strokeDasharray="4 3" dot={false} />
+              <Area type="monotone" dataKey="Bruto"     stroke="#e2c97e" strokeWidth={1.5} fill="url(#gb)" dot={false} />
+              <Area type="monotone" dataKey="Líquido"   stroke="#7ecfb3" strokeWidth={2}   fill="url(#gl)" dot={false} activeDot={{ r:4 }} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </ChartCard>
+
+        <ChartCard title="Alocação por Tipo">
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={byType} dataKey="value" nameKey="label" cx="50%" cy="50%" outerRadius={75} innerRadius={42} paddingAngle={3}
+                label={({ label: lb, percent }) => `${lb} ${(percent*100).toFixed(0)}%`}
+                labelLine={{ stroke:"#2a2820" }}>
+                {byType.map((t, i) => <Cell key={i} fill={t.color} stroke="#0e0d0b" strokeWidth={2} />)}
+              </Pie>
+              <Tooltip formatter={v => fmt(v)} contentStyle={{ background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, fontFamily:"IBM Plex Mono,monospace", fontSize:11 }} />
+            </PieChart>
+          </ResponsiveContainer>
+        </ChartCard>
+      </div>
+
+      <div style={{ ...P.grid2, gridTemplateColumns:isMobile?"1fr":"1fr 1fr" }}>
+        <ChartCard title="🔔 Vencimentos">
+          {vencAlerts.length === 0
+            ? <Muted>✓ Nenhum vencimento próximo (90 dias).</Muted>
+            : vencAlerts.map(({ inv, a }) => (
+              <AlertRow key={inv.id} name={inv.nome} sub={`Vence: ${fmtD(inv.vencimento)}`} badge={a.label} badgeColor={a.cor} urgent={a.urgente} />
+            ))
+          }
+        </ChartCard>
+
+        <ChartCard title="⚠️ Alertas de IR">
+          {irAlerts.length === 0
+            ? <Muted>✓ Nenhum investimento próximo de mudar de faixa.</Muted>
+            : irAlerts.map(({ inv, a }) => (
+              <AlertRow key={inv.id} name={inv.nome} sub={`IR: ${a.faixa} → ${a.proxima}`} badge={`${a.diasRestantes}d`} badgeColor={a.urgente?"#e27e9a":"#e2c97e"} urgent={a.urgente} />
+            ))
+          }
+        </ChartCard>
+      </div>
+
+      {byCat.length > 0 && (
+        <ChartCard title="Distribuição por Categoria">
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={byCat} layout="vertical" margin={{ top:4, right:8, left:0, bottom:0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" horizontal={false} />
+              <XAxis type="number" tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" tick={{ fill:"#c9bfaa", fontSize:11, fontFamily:"IBM Plex Mono" }} axisLine={false} tickLine={false} width={90} />
+              <Tooltip formatter={v => fmt(v)} contentStyle={{ background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, fontFamily:"IBM Plex Mono,monospace", fontSize:11 }} />
+              <Bar dataKey="value" radius={[0,4,4,0]}>
+                {byCat.map((c, i) => <Cell key={i} fill={c.color} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartCard>
+      )}
+    </div>
+  );
+}
+
+function ScreenInvestments({ invs, cats, projs, fx, isMobile, onAdd, onEdit, onDel, onDep, onExJSON, onExCSV, onImport }) {
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+
+  const filtered = projs.filter(inv =>
+    (filter === "all" || inv.tipo === filter) &&
+    inv.nome.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Investimentos" subtitle={`${invs.length} ativo${invs.length !== 1 ? "s" : ""}`}>
+        <div style={{ display:"flex", gap:7, flexWrap:"wrap" }}>
+          <BtnSec onClick={onImport}><Icon name="upload" size={13}/>Importar</BtnSec>
+          <BtnSec onClick={onExCSV}><Icon name="download" size={13}/>CSV</BtnSec>
+          <BtnSec onClick={onExJSON}><Icon name="download" size={13}/>JSON</BtnSec>
+          <Btn onClick={onAdd}>+ Novo</Btn>
+        </div>
+      </PageHeader>
+
+      <div style={P.filterRow} className="filter-row">
+        <input style={P.search} className="search-input" placeholder="Buscar..." value={search} onChange={e => setSearch(e.target.value)} />
+        <div style={{ display:"flex", flexWrap:"wrap", gap:7 }}>
+          <Chip active={filter==="all"} onClick={() => setFilter("all")}>Todos</Chip>
+          {TYPES.filter(t => invs.some(i => i.tipo === t.id)).map(t => (
+            <Chip key={t.id} active={filter===t.id} onClick={() => setFilter(t.id)} color={t.color}>{t.icon} {t.label}</Chip>
+          ))}
+        </div>
+      </div>
+
+      {filtered.length === 0
+        ? <Empty>Nenhum investimento encontrado.</Empty>
+        : (
+          <div style={P.cardGrid}>
+            {filtered.map(inv => (
+              <InvCard key={inv.id} inv={inv} cats={cats} fx={fx} onEdit={onEdit} onDel={onDel} onDep={onDep} />
+            ))}
+          </div>
+        )
+      }
+    </div>
+  );
+}
+
+function InvCard({ inv, cats, fx, onEdit, onDel, onDep }) {
+  const t       = getType(inv.tipo);
+  const cat     = cats.find(c => c.id === inv.categoriaId);
+  const last    = inv.months[11];
+  const fxRate  = t.currency ? (fx[t.currency] || 1) : 1;
+  const valBRL  = inv.valor * fxRate;
+  const gain    = last.rendLiquido;
+  const gainPct = valBRL > 0 ? gain / valBRL * 100 : 0;
+  const irAlert = getIRAlert(inv);
+  const va      = getVencAlert(inv);
+
+  return (
+    <div style={{ ...P.invCard, borderColor:t.color+"55" }} className="card-hover">
+      <div style={P.invCardTop}>
+        <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+          <span style={{ ...P.typeIcon, background:t.color+"22", color:t.color }}>{t.icon}</span>
+          <div>
+            <div style={{ color:"#f0ebe0", fontWeight:700, fontSize:14 }}>{inv.nome}</div>
+            <div style={{ color:t.color, fontSize:11, fontFamily:"IBM Plex Mono,monospace" }}>{t.label}{t.currency && ` · ${t.currency}`}</div>
+          </div>
+        </div>
+        <div style={{ display:"flex", gap:5 }}>
+          <IBtn onClick={() => onDep(inv)} title="Registrar aporte" iconName="deposit"/>
+          <IBtn onClick={() => onEdit(inv)} title="Editar" iconName="edit"/>
+          <IBtn onClick={() => onDel(inv.id)} title="Remover" iconName="trash"/>
+        </div>
+      </div>
+
+      {cat && <div style={{ ...P.catTag, borderColor:cat.cor, color:cat.cor }}>{cat.nome}</div>}
+      {va && <div style={{ ...P.pill, borderColor:va.cor+"66", color:va.cor }}>🔔 Vence: {fmtD(inv.vencimento)} ({va.label})</div>}
+      {irAlert && <div style={{ ...P.pill, borderColor:irAlert.urgente?"#e27e9a66":"#e2c97e44", color:irAlert.urgente?"#e27e9a":"#e2c97e" }}>⚠️ IR: {irAlert.faixa}→{irAlert.proxima} em {irAlert.diasRestantes}d</div>}
+
+      <div style={P.metrics}>
+        <Met label={t.currency ? `Valor (${t.currency})` : "Investido"} value={t.currency ? fmtFX(inv.valor, t.currency) : fmt(inv.valor)} />
+        {t.currency && <Met label="Valor (BRL)" value={fmt(valBRL)} accent="#9a9080" />}
+        <Met label={t.intl ? "Retorno a.a." : "% CDI"}    value={fmtP(inv.pct)} />
+        <Met label="Saldo 12m"  value={fmt(last.saldoLiquido)} accent="#7ecfb3" />
+        <Met label="Rend. líq." value={`+${fmt(gain)}`}         accent="#7ecfb3" />
+        <Met label="Retorno %"  value={`+${gainPct.toFixed(2)}%`} accent="#7eb8e2" />
+        {t.ir && <Met label="IR 12m" value={`-${fmt(last.ir)}`} accent="#e27e9a" />}
+      </div>
+
+      {inv.vencimento && <div style={P.dateTag}>Vence: {fmtD(inv.vencimento)}</div>}
+      <div style={P.dateTag}>Início: {fmtD(inv.data)}</div>
+    </div>
+  );
+}
+
+function ScreenHistory({ invs, deps, isMobile, onAddDep, onDelDep }) {
+  const [filterInv, setFilterInv] = useState("all");
+
+  const sorted   = [...deps].sort((a, b) => new Date(b.data) - new Date(a.data));
+  const filtered = filterInv === "all" ? sorted : sorted.filter(d => d.invId === parseInt(filterInv));
+  const totalDep = deps.reduce((a, d) => a + d.valor, 0);
+
+  const byMonth = useMemo(() => {
+    const map = {};
+    deps.forEach(d => {
+      const key = new Date(d.data + "T12:00:00").toLocaleDateString("pt-BR", { month:"short", year:"numeric" });
+      map[key] = (map[key] || 0) + d.valor;
+    });
+    return Object.entries(map).slice(-12).map(([mes, valor]) => ({ mes, valor }));
+  }, [deps]);
+
+  const byInv = useMemo(() => {
+    const map = {};
+    deps.forEach(d => { map[d.invId] = (map[d.invId] || 0) + d.valor; });
+    return map;
+  }, [deps]);
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Histórico de Aportes" subtitle={`${deps.length} aporte${deps.length!==1?"s":""} · ${fmt(totalDep)}`}>
+        <Btn onClick={onAddDep}>+ Registrar Aporte</Btn>
+      </PageHeader>
+
+      <div style={P.kpiRow} className="kpi-row">
+        <KPI label="Total aportado"   value={fmt(totalDep)}                                          color="#F5C518" icon="investments" />
+        <KPI label="Média por aporte" value={deps.length ? fmt(totalDep/deps.length) : "R$ 0"}      color="#aaaaaa" icon="quotes" />
+        <KPI label="Ativos com aportes" value={`${Object.keys(byInv).length}`}                      color="#ffffff" icon="projection" />
+        <KPI label="Último aporte"    value={sorted[0] ? fmtD(sorted[0].data) : "—"}                color="#F5C518" icon="history" />
+      </div>
+
+      <div style={{ ...P.grid2, gridTemplateColumns:isMobile?"1fr":"2fr 1fr" }}>
+        <ChartCard title="Aportes por Mês">
+          {byMonth.length === 0
+            ? <Empty>Nenhum aporte registrado.</Empty>
+            : (
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={byMonth} margin={{ top:8, right:8, left:0, bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" vertical={false} />
+                  <XAxis dataKey="mes" tick={{ fill:"#6a6458", fontSize:10 }} axisLine={{ stroke:"#2a2820" }} tickLine={false} />
+                  <YAxis tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} width={52} />
+                  <Tooltip content={<ChartTip />} />
+                  <Bar dataKey="valor" fill="#e2c97e" radius={[4,4,0,0]} fillOpacity={0.85} />
+                </BarChart>
+              </ResponsiveContainer>
+            )
+          }
+        </ChartCard>
+
+        <ChartCard title="Por Investimento">
+          {invs.filter(i => byInv[i.id]).length === 0
+            ? <Muted>Sem aportes.</Muted>
+            : invs.filter(i => byInv[i.id]).map(inv => {
+              const t   = getType(inv.tipo);
+              const val = byInv[inv.id] || 0;
+              const pct = totalDep > 0 ? val / totalDep * 100 : 0;
+              return (
+                <div key={inv.id} style={{ marginBottom:10 }}>
+                  <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                    <span style={{ color:"#c9bfaa", fontSize:12 }}>{t.icon} {inv.nome}</span>
+                    <span style={{ color:t.color, fontFamily:"IBM Plex Mono,monospace", fontSize:11 }}>{fmt(val)}</span>
+                  </div>
+                  <div style={{ height:4, background:"#1e1c16", borderRadius:2 }}>
+                    <div style={{ height:4, background:t.color, borderRadius:2, width:`${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })
+          }
+        </ChartCard>
+      </div>
+
+      <ChartCard title="Todos os Aportes">
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:12, flexWrap:"wrap", gap:8 }}>
+          <div />
+          <select style={{ ...P.search, width:"auto", cursor:"pointer" }} value={filterInv} onChange={e => setFilterInv(e.target.value)}>
+            <option value="all">Todos</option>
+            {invs.map(inv => <option key={inv.id} value={inv.id}>{inv.nome}</option>)}
+          </select>
+        </div>
+        {filtered.length === 0
+          ? <Muted>Nenhum aporte encontrado.</Muted>
+          : (
+            <div style={{ overflowX:"auto" }}>
+              <table style={P.table}>
+                <thead><tr>
+                  <th style={P.th}>Data</th>
+                  <th style={P.th}>Investimento</th>
+                  <th style={P.th}>Valor</th>
+                  <th style={P.th}>Obs.</th>
+                  <th style={P.th}></th>
+                </tr></thead>
+                <tbody>
+                  {filtered.map(dep => {
+                    const inv = invs.find(i => i.id === dep.invId);
+                    const t   = getType(inv?.tipo);
+                    return (
+                      <tr key={dep.id} style={P.tr}>
+                        <td style={{ ...P.td, color:"#c9bfaa" }}>{fmtD(dep.data)}</td>
+                        <td style={{ ...P.td, color:t.color }}>{t.icon} {inv?.nome || "—"}</td>
+                        <td style={{ ...P.td, color:"#7ecfb3", fontWeight:600 }}>{fmt(dep.valor)}</td>
+                        <td style={{ ...P.td, color:"#6a6458", fontSize:11 }}>{dep.obs || "—"}</td>
+                        <td style={P.td}><IBtn onClick={() => onDelDep(dep.id)} title="Remover" iconName="trash"/></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )
+        }
+      </ChartCard>
+    </div>
+  );
+}
+
+function ScreenComparator({ invs, projs, isMobile }) {
+  const [selA, setSelA] = useState(invs[0]?.id ?? null);
+  const [selB, setSelB] = useState(invs[1]?.id ?? null);
+
+  const invA = projs.find(p => p.id === selA);
+  const invB = projs.find(p => p.id === selB);
+
+  const chartData = invA && invB
+    ? Array.from({ length:12 }, (_, i) => ({
+        mes:          invA.months[i].mes.split(" ")[0],
+        [invA.nome]:  invA.months[i].saldoLiquido,
+        [invB.nome]:  invB.months[i].saldoLiquido,
+      }))
+    : [];
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Comparador" subtitle="Compare dois investimentos lado a lado" />
+
+      {invs.length < 2
+        ? <Empty>Cadastre ao menos 2 investimentos para comparar.</Empty>
+        : (
+          <>
+            <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:16, marginBottom:20 }}>
+              {[{ sel:selA, set:setSelA, label:"Investimento A", color:"#e2c97e" },
+                { sel:selB, set:setSelB, label:"Investimento B", color:"#7eb8e2" }].map(({ sel, set, label, color }) => (
+                <CompSelector key={label} sel={sel} setSel={set} label={label} color={color} invs={invs} projs={projs} />
+              ))}
+            </div>
+
+            {invA && invB && (
+              <>
+                <ChartCard title="Saldo Líquido — 12 meses">
+                  <ResponsiveContainer width="100%" height={220}>
+                    <AreaChart data={chartData} margin={{ top:8, right:8, left:0, bottom:0 }}>
+                      <defs>
+                        <linearGradient id="cA" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%"   stopColor="#e2c97e" stopOpacity={0.3} />
+                          <stop offset="100%" stopColor="#e2c97e" stopOpacity={0.02} />
+                        </linearGradient>
+                        <linearGradient id="cB" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%"   stopColor="#7eb8e2" stopOpacity={0.3} />
+                          <stop offset="100%" stopColor="#7eb8e2" stopOpacity={0.02} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" vertical={false} />
+                      <XAxis dataKey="mes" tick={{ fill:"#6a6458", fontSize:10 }} axisLine={{ stroke:"#2a2820" }} tickLine={false} />
+                      <YAxis tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} width={56} />
+                      <Tooltip content={<ChartTip />} />
+                      <Legend wrapperStyle={{ fontFamily:"IBM Plex Mono", fontSize:10, color:"#6a6458" }} iconType="circle" iconSize={7} />
+                      <Area type="monotone" dataKey={invA.nome} stroke="#e2c97e" strokeWidth={2} fill="url(#cA)" dot={false} />
+                      <Area type="monotone" dataKey={invB.nome} stroke="#7eb8e2" strokeWidth={2} fill="url(#cB)" dot={false} />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </ChartCard>
+
+                <div style={{ marginTop:16 }}>
+                  <ChartCard title="Confronto direto — 12 meses">
+                    <CompTable invA={invA} invB={invB} />
+                  </ChartCard>
+                </div>
+              </>
+            )}
+          </>
+        )
+      }
+    </div>
+  );
+}
+
+function CompSelector({ sel, setSel, label, color, invs, projs }) {
+  const inv = projs.find(p => p.id === sel);
+  return (
+    <div style={{ ...P.chartCard, borderColor:color+"44" }}>
+      <div style={{ ...P.chartTitle, color }}>{label}</div>
+      <select style={{ ...P.search, width:"100%", cursor:"pointer" }} value={sel ?? ""} onChange={e => setSel(parseInt(e.target.value))}>
+        {invs.map(i => <option key={i.id} value={i.id}>{i.nome}</option>)}
+      </select>
+      {inv && (
+        <div style={{ marginTop:12, display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+          <Met label="Investido"  value={fmt(inv.valor)} />
+          <Met label="% CDI/Ret." value={fmtP(inv.pct)} />
+          <Met label="Saldo 12m"  value={fmt(inv.months[11].saldoLiquido)} accent={color} />
+          <Met label="Rend. líq." value={`+${fmt(inv.months[11].rendLiquido)}`} accent={color} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompTable({ invA, invB }) {
+  const rows = [
+    { label:"Valor investido",   a:invA.valor,                                 b:invB.valor },
+    { label:"Saldo bruto 12m",   a:invA.months[11].saldo,                      b:invB.months[11].saldo },
+    { label:"IR 12m",            a:invA.months[11].ir,                         b:invB.months[11].ir, lower:true },
+    { label:"Saldo líquido 12m", a:invA.months[11].saldoLiquido,               b:invB.months[11].saldoLiquido },
+    { label:"Rend. líquido 12m", a:invA.months[11].rendLiquido,                b:invB.months[11].rendLiquido },
+    { label:"Retorno %",         a:invA.months[11].rendLiquido/invA.valor*100,  b:invB.months[11].rendLiquido/invB.valor*100, pct:true },
+  ];
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <table style={P.table}>
+        <thead><tr>
+          <th style={P.th}>Métrica</th>
+          <th style={{ ...P.th, color:"#e2c97e" }}>{invA.nome}</th>
+          <th style={{ ...P.th, color:"#7eb8e2" }}>{invB.nome}</th>
+          <th style={{ ...P.th, color:"#7ecfb3" }}>Vencedor</th>
+        </tr></thead>
+        <tbody>
+          {rows.map(({ label, a, b, lower, pct }) => {
+            const w = lower ? (a<b?"A":b<a?"B":null) : (a>b?"A":b>a?"B":null);
+            return (
+              <tr key={label} style={P.tr}>
+                <td style={{ ...P.td, color:"#9a9080" }}>{label}</td>
+                <td style={{ ...P.td, color:w==="A"?"#7ecfb3":"#b0a990", fontWeight:w==="A"?700:400 }}>{pct ? fmtP(a) : fmt(a)}</td>
+                <td style={{ ...P.td, color:w==="B"?"#7ecfb3":"#b0a990", fontWeight:w==="B"?700:400 }}>{pct ? fmtP(b) : fmt(b)}</td>
+                <td style={P.td}>
+                  {w === "A" && <span style={{ color:"#e2c97e", fontWeight:700 }}>🏆 {invA.nome}</span>}
+                  {w === "B" && <span style={{ color:"#7eb8e2", fontWeight:700 }}>🏆 {invB.nome}</span>}
+                  {!w        && <span style={{ color:"#4a4438" }}>—</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ScreenProjection({ invs, projs, cons, totalInv, settings, isMobile }) {
+  const [view,   setView]   = useState("liquido");
+  const [months, setMonths] = useState(12);
+  const isLiq = view === "liquido";
+  const rows  = cons.slice(0, months);
+  const last  = rows[rows.length - 1];
+
+  const barData = rows.map((r, i) => {
+    const prev = rows[i - 1];
+    return {
+      mes:            r.mes.split(" ")[0],
+      "Rend. Bruto":  i===0 ? r.rendimento  : r.rendimento  - (prev?.rendimento  ?? 0),
+      "Rend. Líquido":i===0 ? r.rendLiquido  : r.rendLiquido - (prev?.rendLiquido ?? 0),
+      "IR":           i===0 ? r.ir           : r.ir          - (prev?.ir          ?? 0),
+    };
+  });
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Projeção" subtitle={`CDI ${fmtP(settings.cdiRate)} a.a.`}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <Toggle options={["liquido","bruto"]} labels={["Líquido","Bruto"]} value={view} onChange={setView} />
+          <Toggle options={[12,24]} labels={["12m","24m"]} value={months} onChange={setMonths} />
+        </div>
+      </PageHeader>
+
+      {cons.length === 0
+        ? <Empty>Adicione investimentos para ver a projeção.</Empty>
+        : (
+          <>
+            <div style={P.kpiRow} className="kpi-row">
+              <KPI label={`Saldo (${months}m)`}  value={fmt(isLiq ? last?.saldoLiquido : last?.saldo)}       color="#ffffff" icon="projection" />
+              <KPI label="Rendimento total"        value={`+${fmt(isLiq ? last?.rendLiquido : last?.rendimento)}`} color="#aaaaaa" icon="quotes" />
+              <KPI label="IR total"                value={`-${fmt(last?.ir ?? 0)}`}                          color="#ff6666" icon="alert" />
+              <KPI label="Retorno s/ capital"      value={fmtP(((last?.rendLiquido ?? 0) / totalInv) * 100)} color="#F5C518" icon="investments" />
+            </div>
+
+            <ChartCard title="Rendimento Mensal Incremental">
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={barData} margin={{ top:8, right:8, left:0, bottom:0 }} barCategoryGap="30%">
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1814" vertical={false} />
+                  <XAxis dataKey="mes" tick={{ fill:"#6a6458", fontSize:10 }} axisLine={{ stroke:"#2a2820" }} tickLine={false} />
+                  <YAxis tickFormatter={fmtS} tick={{ fill:"#6a6458", fontSize:10 }} axisLine={false} tickLine={false} width={56} />
+                  <Tooltip content={<ChartTip />} />
+                  <Legend wrapperStyle={{ fontFamily:"IBM Plex Mono", fontSize:10, color:"#6a6458", paddingTop:4 }} iconType="square" iconSize={8} />
+                  <Bar dataKey="Rend. Bruto"   fill="#e2c97e" radius={[3,3,0,0]} fillOpacity={0.85} />
+                  <Bar dataKey="IR"            fill="#e27e9a" radius={[3,3,0,0]} fillOpacity={0.85} />
+                  <Bar dataKey="Rend. Líquido" fill="#7ecfb3" radius={[3,3,0,0]} fillOpacity={0.85} />
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartCard>
+
+            <div style={{ marginTop:16 }}>
+              <ChartCard title="Tabela Detalhada">
+                <div style={{ overflowX:"auto" }}>
+                  <table style={P.table}>
+                    <thead><tr>
+                      <th style={P.th}>Mês</th>
+                      {projs.map(p => <th key={p.id} style={{ ...P.th, color:"#e2c97e" }}>{p.nome}</th>)}
+                      {projs.length > 1 && <th style={{ ...P.th, color:"#7ecfb3" }}>Total</th>}
+                      <th style={{ ...P.th, color:"#e27e9a" }}>IR</th>
+                      <th style={{ ...P.th, color:"#7eb8e2" }}>Rend. Líq.</th>
+                    </tr></thead>
+                    <tbody>
+                      {rows.map((row, i) => (
+                        <tr key={i} style={P.tr}>
+                          <td style={{ ...P.td, color:"#c9bfaa", fontWeight:600 }}>{row.mes}</td>
+                          {projs.map(p => (
+                            <td key={p.id} style={{ ...P.td, color:isLiq?"#7ecfb3":"#b0a990" }}>
+                              {fmt(isLiq ? p.months[i].saldoLiquido : p.months[i].saldo)}
+                            </td>
+                          ))}
+                          {projs.length > 1 && (
+                            <td style={{ ...P.td, color:"#7ecfb3", fontWeight:700 }}>
+                              {fmt(isLiq ? row.saldoLiquido : row.saldo)}
+                            </td>
+                          )}
+                          <td style={{ ...P.td, color:"#e27e9a" }}>-{fmt(row.ir)}</td>
+                          <td style={{ ...P.td, color:"#7eb8e2", fontWeight:600 }}>+{fmt(row.rendLiquido)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p style={P.note}>* CDI {fmtP(settings.cdiRate)} a.a. IR regressivo. Estimativas.</p>
+              </ChartCard>
+            </div>
+          </>
+        )
+      }
+    </div>
+  );
+}
+
+function ScreenCategories({ invs, cats, isMobile, onAdd, onEdit, onDel }) {
+  return (
+    <div style={P.root}>
+      <PageHeader title="Categorias" subtitle="Organize seus investimentos">
+        <Btn onClick={onAdd}>+ Nova</Btn>
+      </PageHeader>
+      {cats.length === 0
+        ? <Empty>Nenhuma categoria criada.</Empty>
+        : (
+          <div style={P.cardGrid}>
+            {cats.map(cat => {
+              const catInvs = invs.filter(i => i.categoriaId === cat.id);
+              const total   = catInvs.reduce((a, c) => a + c.valor, 0);
+              return (
+                <div key={cat.id} style={{ ...P.invCard, borderColor:cat.cor+"66" }} className="card-hover">
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                      <div style={{ width:14, height:14, borderRadius:3, background:cat.cor, flexShrink:0 }} />
+                      <span style={{ color:"#f0ebe0", fontWeight:700, fontSize:15 }}>{cat.nome}</span>
+                    </div>
+                    <div style={{ display:"flex", gap:6 }}>
+                      <IBtn onClick={() => onEdit(cat)} title="Editar" iconName="edit"/>
+                      <IBtn onClick={() => onDel(cat.id)} title="Remover" iconName="trash"/>
+                    </div>
+                  </div>
+                  <div style={{ marginTop:14 }}>
+                    <div style={{ color:cat.cor, fontSize:20, fontWeight:800, fontFamily:"IBM Plex Mono,monospace" }}>{fmt(total)}</div>
+                    <div style={{ color:"#6a6458", fontSize:12, marginTop:3 }}>{catInvs.length} investimento{catInvs.length!==1?"s":""}</div>
+                  </div>
+                  {catInvs.length > 0 && (
+                    <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginTop:10 }}>
+                      {catInvs.map(inv => {
+                        const t = getType(inv.tipo);
+                        return (
+                          <span key={inv.id} style={{ background:"#13120f", border:`1px solid ${t.color}44`, borderRadius:4, padding:"2px 8px", fontSize:11, color:t.color, fontFamily:"IBM Plex Mono,monospace" }}>
+                            {t.icon} {inv.nome}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )
+      }
+    </div>
+  );
+}
+
+function ScreenSettings({ invs, settings, isMobile, onSave, snaps, onRestore, apiKey, onSaveApiKey }) {
+  const [form,      setForm]      = useState({
+    cdiRate: settings.cdiRate,
+    fx:   { ...FX_DEFAULT, ...settings.fx },
+    meta: { ativa:false, valor:100000, prazo:24, ...settings.meta },
+  });
+  const [keyInput,  setKeyInput]  = useState(apiKey || "");
+  const [showKey,   setShowKey]   = useState(false);
+
+  useEffect(() => {
+    setForm(f => ({ ...f, cdiRate: settings.cdiRate }));
+  }, [settings.cdiRate]);
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Configurações" subtitle="Personalize os parâmetros" />
+      <div style={{ maxWidth:520 }}>
+
+        {/* ── Chave de API ── */}
+        <div style={{ ...P.setCard, borderColor: apiKey ? "#7ecfb344" : "#e2c97e44" }}>
+          <div style={P.setTitle}>🔑 Chave de API Anthropic</div>
+          <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"10px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginBottom:14, lineHeight:1.7 }}>
+            Necessária para buscar cotações. Obtenha gratuitamente em{" "}
+            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer"
+              style={{ color:"#e2c97e", textDecoration:"underline" }}>
+              console.anthropic.com/settings/keys
+            </a>
+          </div>
+          {apiKey ? (
+            <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, background:"#081f12", border:"1px solid #7ecfb344", borderRadius:8, padding:"10px 14px" }}>
+              <span style={{ fontSize:16 }}>✓</span>
+              <span style={{ color:"#7ecfb3", fontSize:12, fontFamily:"IBM Plex Mono,monospace", flex:1 }}>Chave configurada (sk-ant-...{apiKey.slice(-6)})</span>
+              <button style={{ ...P.iBtn, fontSize:11 }} onClick={() => { setKeyInput(""); onSaveApiKey(""); }}>Remover</button>
+            </div>
+          ) : (
+            <div style={{ background:"#1a0e08", border:"1px solid #e2c97e44", borderRadius:8, padding:"10px 14px", marginBottom:10, fontSize:11, color:"#e2c97e", fontFamily:"IBM Plex Mono,monospace" }}>
+              ⚠️ Sem chave configurada — cotações não funcionarão.
+            </div>
+          )}
+          <label style={P.label}>Cole sua chave aqui</label>
+          <div style={{ display:"flex", gap:8 }}>
+            <div style={{ flex:1, position:"relative" }}>
+              <input
+                style={{ ...P.input, paddingRight:40, fontFamily:"IBM Plex Mono,monospace", fontSize:12 }}
+                type={showKey ? "text" : "password"}
+                value={keyInput}
+                onChange={e => setKeyInput(e.target.value)}
+                placeholder="sk-ant-api03-..."
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <button
+                onClick={() => setShowKey(s => !s)}
+                style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", color:"#6a6458", fontSize:14 }}>
+                {showKey ? "🙈" : "👁️"}
+              </button>
+            </div>
+            <Btn onClick={() => onSaveApiKey(keyInput)}>Salvar</Btn>
+          </div>
+          <div style={{ color:"#4a4438", fontSize:10, fontFamily:"IBM Plex Mono,monospace", marginTop:6 }}>
+            🔒 A chave é salva apenas neste navegador (localStorage). Nunca sai do seu dispositivo.
+          </div>
+        </div>
+
+        {/* ── Taxa CDI ── */}
+        <div style={P.setCard}>
+          <div style={P.setTitle}>Taxa CDI</div>
+          <div style={{ display:"flex", gap:16, background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:10, padding:16 }}>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:28, fontWeight:800, color:"#e2c97e", fontFamily:"IBM Plex Mono,monospace" }}>{fmtP(settings.cdiRate)}</div>
+              <div style={{ fontSize:10, color:"#6a6458", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", marginTop:4 }}>CDI atual a.a. · {CDI_REF}</div>
+            </div>
+            <div style={{ background:"#13120f", border:"1px solid #1e1c16", borderRadius:8, padding:"10px 14px", display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", minWidth:90 }}>
+              <span style={{ fontSize:20 }}>📡</span>
+              <span style={{ fontSize:9, color:"#5a5448", fontFamily:"IBM Plex Mono,monospace", marginTop:4 }}>Claude</span>
+            </div>
+          </div>
+          <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"9px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginTop:10, lineHeight:1.6 }}>
+            ℹ️ Sandbox do Claude.ai bloqueia chamadas externas. Taxa atualizada manualmente a cada versão.
+          </div>
+          <label style={P.label}>Ajuste manual (% a.a.)</label>
+          <div style={{ display:"flex", gap:10 }}>
+            <input style={{ ...P.input, flex:1 }} type="number" step="0.01" value={form.cdiRate} onChange={e => setForm(f => ({ ...f, cdiRate: parseFloat(e.target.value)||0 }))} />
+            <Btn onClick={() => onSave(form)}>Salvar</Btn>
+          </div>
+        </div>
+
+        <div style={P.setCard}>
+          <div style={P.setTitle}>🌍 Câmbio USD / EUR</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:10 }}>
+            {[["USD","🇺🇸","#60a5fa"],["EUR","🇪🇺","#a78bfa"]].map(([cur, flag, color]) => (
+              <div key={cur} style={{ background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, padding:"12px 14px" }}>
+                <div style={{ fontSize:10, color:"#6a6458", fontFamily:"IBM Plex Mono,monospace", marginBottom:4 }}>{flag} {cur} / BRL</div>
+                <div style={{ fontSize:22, fontWeight:800, color, fontFamily:"IBM Plex Mono,monospace" }}>R${form.fx[cur]?.toFixed(2)}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+            <div>
+              <label style={P.label}>USD manual</label>
+              <input style={P.input} type="number" step="0.01" value={form.fx.USD} onChange={e => setForm(f => ({ ...f, fx:{ ...f.fx, USD:parseFloat(e.target.value)||f.fx.USD } }))} />
+            </div>
+            <div>
+              <label style={P.label}>EUR manual</label>
+              <input style={P.input} type="number" step="0.01" value={form.fx.EUR} onChange={e => setForm(f => ({ ...f, fx:{ ...f.fx, EUR:parseFloat(e.target.value)||f.fx.EUR } }))} />
+            </div>
+          </div>
+          <div style={{ marginTop:12 }}>
+            <Btn onClick={() => onSave(form)}>Salvar Câmbio</Btn>
+          </div>
+        </div>
+
+        <div style={P.setCard}>
+          <div style={P.setTitle}>🎯 Meta de Patrimônio</div>
+          <label style={{ display:"flex", alignItems:"center", gap:10, marginBottom:12, cursor:"pointer" }}>
+            <input type="checkbox" checked={form.meta?.ativa ?? false}
+              onChange={e => setForm(f => ({ ...f, meta:{ ...f.meta, ativa:e.target.checked } }))}
+              style={{ width:16, height:16, accentColor:"#b77ee2" }} />
+            <span style={{ color:"#c9bfaa", fontSize:13 }}>Ativar meta de patrimônio</span>
+          </label>
+          {form.meta?.ativa && (
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+              <div>
+                <label style={P.label}>Valor meta (R$)</label>
+                <input style={P.input} type="number" value={form.meta.valor} onChange={e => setForm(f => ({ ...f, meta:{ ...f.meta, valor:parseFloat(e.target.value)||0 } }))} />
+              </div>
+              <div>
+                <label style={P.label}>Prazo (meses)</label>
+                <input style={P.input} type="number" value={form.meta.prazo} onChange={e => setForm(f => ({ ...f, meta:{ ...f.meta, prazo:parseInt(e.target.value)||0 } }))} />
+              </div>
+            </div>
+          )}
+          <div style={{ marginTop:12 }}><Btn onClick={() => onSave(form)}>Salvar Meta</Btn></div>
+        </div>
+
+        <div style={P.setCard}>
+          <div style={P.setTitle}>Tabela IR Regressiva</div>
+          {[["Até 180 dias","22,5%","Curto prazo"],["181–360 dias","20,0%","Médio prazo"],["361–720 dias","17,5%","Longo prazo"],["Acima de 720 dias","15,0%","Muito longo prazo"]].map(([l, a, d]) => (
+            <div key={l} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom:"1px solid #191714" }}>
+              <div>
+                <div style={{ color:"#c9bfaa", fontSize:13 }}>{l}</div>
+                <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace" }}>{d}</div>
+              </div>
+              <span style={{ color:"#e27e9a", fontWeight:700, fontFamily:"IBM Plex Mono,monospace" }}>{a}</span>
+            </div>
+          ))}
+          <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginTop:8, fontStyle:"italic" }}>* LCI/LCA e Bolsa são isentos de IR.</div>
+        </div>
+
+        {/* Versions / Snapshots */}
+        <div style={P.setCard}>
+          <div style={P.setTitle}>🕐 Versões Anteriores</div>
+          {(!snaps || snaps.length === 0) ? (
+            <div style={{ color:"#4a4438", fontSize:12, fontFamily:"IBM Plex Mono,monospace" }}>
+              Nenhuma versão salva ainda. As versões são criadas automaticamente a cada alteração.
+            </div>
+          ) : (
+            <>
+              <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginBottom:12 }}>
+                {snaps.length} versão{snaps.length!==1?"ões":""} salva{snaps.length!==1?"s":""}. Limite: {MAX_SNAPS}.
+              </div>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {snaps.map((snap, i) => {
+                  const d    = new Date(snap.ts);
+                  const date = d.toLocaleDateString("pt-BR");
+                  const time = d.toLocaleTimeString("pt-BR", { hour:"2-digit", minute:"2-digit" });
+                  return (
+                    <div key={snap.ts} style={{ display:"flex", alignItems:"center", gap:12, background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, padding:"10px 14px" }}>
+                      <div style={{ flex:1 }}>
+                        <div style={{ color:"#c9bfaa", fontSize:13, fontWeight:600 }}>{date} às {time}</div>
+                        <div style={{ color:"#5a5448", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginTop:2 }}>{snap.label}{i === 0 ? " · versão anterior" : ""}</div>
+                      </div>
+                      <SnapRestoreBtn snap={snap} onRestore={onRestore} />
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ color:"#4a4438", fontSize:10, fontFamily:"IBM Plex Mono,monospace", marginTop:10, fontStyle:"italic" }}>
+                Ao restaurar, a versão atual é automaticamente salva como backup.
+              </div>
+            </>
+          )}
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MINHA RENDA
+// ═══════════════════════════════════════════════════════════════════════════════
+function ScreenRenda({ renda, isMobile, onSave }) {
+  const hoje = new Date();
+  const [mesIdx, setMesIdx] = useState(hoje.getMonth());
+  const [editReceita, setEditReceita] = useState(false);
+  const [addCat, setAddCat] = useState(false);
+  const [newCatNome, setNewCatNome] = useState("");
+
+  const mesData = renda[mesIdx] || defRendaMes();
+  const cats = mesData.gastos || DEF_RENDA_CATS.map(c => ({ catId:c.id, previsto:DEF_RENDA_GASTOS_PREV[c.id]||0, real:0 }));
+
+  const totalReceita = (mesData.receitas?.salario||0) + (mesData.receitas?.freelance||0) + (mesData.receitas?.outros||0);
+  const totalPrevisto = cats.reduce((a,g) => a + (g.previsto||0), 0);
+  const totalReal     = cats.reduce((a,g) => a + (g.real||0), 0);
+  const saldo         = totalReceita - totalReal;
+  const comprometido  = totalReceita > 0 ? (totalReal / totalReceita * 100) : 0;
+
+  function updateReceita(field, val) {
+    const newRec = { ...mesData.receitas, [field]: parseFloat(val)||0 };
+    onSave(mesIdx, { ...mesData, receitas: newRec });
+  }
+
+  function updateGasto(catId, field, val) {
+    const newGastos = cats.map(g => g.catId === catId ? { ...g, [field]: parseFloat(val)||0 } : g);
+    onSave(mesIdx, { ...mesData, gastos: newGastos });
+  }
+
+  function addNewCat() {
+    if (!newCatNome.trim()) return;
+    const newId = Date.now();
+    DEF_RENDA_CATS.push({ id: newId, nome: newCatNome.trim(), icone: "📦" });
+    const newGastos = [...cats, { catId: newId, previsto:0, real:0 }];
+    onSave(mesIdx, { ...mesData, gastos: newGastos });
+    setNewCatNome(""); setAddCat(false);
+  }
+
+  function removeCat(catId) {
+    const newGastos = cats.filter(g => g.catId !== catId);
+    onSave(mesIdx, { ...mesData, gastos: newGastos });
+  }
+
+  // Chart data — top 8 by real value
+  const chartData = cats
+    .map(g => { const c = DEF_RENDA_CATS.find(x => x.id === g.catId); return { nome: c?.nome||"?", real: g.real||0, previsto: g.previsto||0 }; })
+    .filter(x => x.real > 0 || x.previsto > 0)
+    .sort((a,b) => b.real - a.real)
+    .slice(0, 8);
+
+  const saldoOk = saldo >= 0;
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Minha Renda" subtitle="Controle financeiro mensal — ganhos e gastos" />
+
+      {/* Month tabs */}
+      <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:24 }}>
+        {MESES.map((m, i) => (
+          <button key={i} onClick={() => setMesIdx(i)}
+            style={{ padding:"6px 14px", borderRadius:20, border:"1px solid", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", cursor:"pointer", fontWeight: mesIdx===i?700:400,
+              background: mesIdx===i?"#F5C518":"#111",
+              color:      mesIdx===i?"#000":"#666",
+              borderColor:mesIdx===i?"#F5C518":"#2a2a2a" }}>
+            {m.substring(0,3)}
+          </button>
+        ))}
+      </div>
+
+      {/* KPI cards */}
+      <div style={P.kpiRow} className="kpi-row">
+        <KPI label="Total Receitas"   value={fmt(totalReceita)}              color="#F5C518" icon="deposit" />
+        <KPI label="Total Gastos"     value={fmt(totalReal)}                 color={totalReal > totalPrevisto ? "#ff6666" : "#ffffff"} icon="renda" />
+        <KPI label="Saldo do Mês"     value={fmt(saldo)}                     color={saldoOk ? "#00cc66" : "#ff6666"} icon={saldoOk?"dashboard":"alert"} />
+        <KPI label="Comprometido"     value={`${comprometido.toFixed(1)}%`}  color={comprometido > 90 ? "#ff6666" : comprometido > 70 ? "#F5C518" : "#00cc66"} icon="comparator" />
+      </div>
+
+      {/* Saldo bar */}
+      <div style={{ ...P.chartCard, marginBottom:20 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
+          <span style={{ fontSize:11, color:"#555", fontFamily:"'IBM Plex Mono',monospace", textTransform:"uppercase", letterSpacing:1.2 }}>
+            Gastos vs Receita — {MESES[mesIdx]}
+          </span>
+          <span style={{ fontSize:12, color: saldoOk?"#00cc66":"#ff6666", fontFamily:"'IBM Plex Mono',monospace", fontWeight:700 }}>
+            {saldoOk ? `Sobram ${fmt(saldo)}` : `Déficit ${fmt(Math.abs(saldo))}`}
+          </span>
+        </div>
+        <div style={{ height:10, background:"#1a1a1a", borderRadius:5, overflow:"hidden" }}>
+          <div style={{ height:10, borderRadius:5, width:`${Math.min(100,comprometido)}%`, transition:"width .5s",
+            background: comprometido>100?"#ff6666":comprometido>80?"#F5C518":"#00cc66" }} />
+        </div>
+        <div style={{ display:"flex", justifyContent:"space-between", marginTop:5, fontSize:10, color:"#555", fontFamily:"'IBM Plex Mono',monospace" }}>
+          <span>R$ 0</span>
+          <span>Meta: 80% ({fmt(totalReceita*0.8)})</span>
+          <span>{fmt(totalReceita)}</span>
+        </div>
+      </div>
+
+      <div style={{ ...P.grid2, gridTemplateColumns:isMobile?"1fr":"1fr 1fr" }}>
+        {/* Receitas */}
+        <div style={P.chartCard}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+            <div style={P.chartTitle}>💰 Receitas</div>
+            <button style={{ ...P.iBtn, fontSize:11 }} onClick={() => setEditReceita(e => !e)}>
+              {editReceita ? "✓ Fechar" : "✏️ Editar"}
+            </button>
+          </div>
+          {[
+            { key:"salario",   label:"Salário",            icon:"👔" },
+            { key:"freelance", label:"Freelance / Extra",  icon:"💡" },
+            { key:"outros",    label:"Outros",             icon:"📦" },
+          ].map(({ key, label, icon }) => (
+            <div key={key} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 0", borderBottom:"1px solid #1a1a1a" }}>
+              <span style={{ fontSize:18, width:28 }}>{icon}</span>
+              <span style={{ flex:1, color:"#ccc", fontSize:13 }}>{label}</span>
+              {editReceita
+                ? <input type="number" defaultValue={mesData.receitas?.[key]||0}
+                    onBlur={e => updateReceita(key, e.target.value)}
+                    style={{ ...P.input, width:120, textAlign:"right", fontSize:13 }} />
+                : <span style={{ color:"#F5C518", fontWeight:700, fontFamily:"'IBM Plex Mono',monospace", fontSize:14 }}>{fmt(mesData.receitas?.[key]||0)}</span>
+              }
+            </div>
+          ))}
+          <div style={{ display:"flex", justifyContent:"space-between", marginTop:12, padding:"10px 0" }}>
+            <span style={{ color:"#555", fontSize:12, textTransform:"uppercase", letterSpacing:1, fontFamily:"'IBM Plex Mono',monospace" }}>TOTAL</span>
+            <span style={{ color:"#F5C518", fontWeight:800, fontFamily:"'IBM Plex Mono',monospace", fontSize:16 }}>{fmt(totalReceita)}</span>
+          </div>
+        </div>
+
+        {/* Gastos chart */}
+        <div style={P.chartCard}>
+          <div style={P.chartTitle}>📊 Gastos por Categoria</div>
+          {chartData.length === 0
+            ? <Muted>Nenhum gasto lançado ainda.</Muted>
+            : (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={chartData} layout="vertical" margin={{ top:0, right:8, left:0, bottom:0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1a1a1a" horizontal={false} />
+                  <XAxis type="number" tickFormatter={v => `R$${(v/1000).toFixed(1)}k`} tick={{ fill:"#555", fontSize:10 }} axisLine={false} tickLine={false} />
+                  <YAxis type="category" dataKey="nome" tick={{ fill:"#aaa", fontSize:10, fontFamily:"'IBM Plex Mono',monospace" }} axisLine={false} tickLine={false} width={100} />
+                  <Tooltip formatter={v => fmt(v)} contentStyle={{ background:"#111", border:"1px solid #222", borderRadius:8, fontFamily:"'IBM Plex Mono',monospace", fontSize:11 }} />
+                  <Legend wrapperStyle={{ fontFamily:"'IBM Plex Mono',monospace", fontSize:10, color:"#555" }} iconType="square" iconSize={7} />
+                  <Bar dataKey="previsto" name="Previsto" fill="#333"    radius={[0,3,3,0]} />
+                  <Bar dataKey="real"     name="Real"     fill="#F5C518" radius={[0,3,3,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )
+          }
+        </div>
+      </div>
+
+      {/* Gastos table */}
+      <div style={{ ...P.chartCard, marginTop:4 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:8 }}>
+          <div style={P.chartTitle}>💸 Lançamento de Gastos — {MESES[mesIdx]}</div>
+          <div style={{ display:"flex", gap:8 }}>
+            <span style={{ color:"#555", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", alignSelf:"center" }}>
+              Previsto: <strong style={{ color:"#aaa" }}>{fmt(totalPrevisto)}</strong>
+              {" · "}Real: <strong style={{ color: totalReal>totalPrevisto?"#ff6666":"#00cc66" }}>{fmt(totalReal)}</strong>
+            </span>
+            <button style={{ ...P.btnSec, fontSize:11, padding:"6px 12px" }} onClick={() => setAddCat(true)}>+ Categoria</button>
+          </div>
+        </div>
+
+        {addCat && (
+          <div style={{ display:"flex", gap:8, marginBottom:14, padding:12, background:"#0a0a0a", borderRadius:8, border:"1px solid #2a2a2a" }}>
+            <input style={{ ...P.input, flex:1 }} placeholder="Nome da categoria" value={newCatNome} onChange={e => setNewCatNome(e.target.value)} onKeyDown={e => e.key==="Enter" && addNewCat()} autoFocus />
+            <Btn onClick={addNewCat}>Adicionar</Btn>
+            <BtnCancel onClick={() => setAddCat(false)}>Cancelar</BtnCancel>
+          </div>
+        )}
+
+        <div style={{ overflowX:"auto" }}>
+          <table style={P.table}>
+            <thead><tr>
+              <th style={P.th}>Categoria</th>
+              <th style={{ ...P.th, textAlign:"right" }}>Previsto</th>
+              <th style={{ ...P.th, textAlign:"right" }}>Real</th>
+              <th style={{ ...P.th, textAlign:"right" }}>Diferença</th>
+              <th style={{ ...P.th, textAlign:"right" }}>% Total</th>
+              <th style={P.th}></th>
+            </tr></thead>
+            <tbody>
+              {cats.map(g => {
+                const cat = DEF_RENDA_CATS.find(c => c.id === g.catId);
+                if (!cat) return null;
+                const diff = (g.real||0) - (g.previsto||0);
+                const pct  = totalReal > 0 ? (g.real||0) / totalReal * 100 : 0;
+                const acima = diff > 0;
+                return (
+                  <tr key={g.catId} style={P.tr}>
+                    <td style={{ ...P.td, color:"#fff" }}>{cat.icone} {cat.nome}</td>
+                    <td style={{ ...P.td, textAlign:"right" }}>
+                      <input type="number" value={g.previsto||0}
+                        onChange={e => updateGasto(g.catId, "previsto", e.target.value)}
+                        style={{ background:"transparent", border:"none", borderBottom:"1px solid #2a2a2a", color:"#777", fontFamily:"'IBM Plex Mono',monospace", fontSize:12, textAlign:"right", width:90, outline:"none" }} />
+                    </td>
+                    <td style={{ ...P.td, textAlign:"right" }}>
+                      <input type="number" value={g.real||0}
+                        onChange={e => updateGasto(g.catId, "real", e.target.value)}
+                        style={{ background:"transparent", border:"none", borderBottom:"1px solid #F5C518", color:"#fff", fontFamily:"'IBM Plex Mono',monospace", fontSize:12, textAlign:"right", width:90, outline:"none", fontWeight:600 }} />
+                    </td>
+                    <td style={{ ...P.td, textAlign:"right", color: acima?"#ff6666":"#00cc66", fontWeight:600 }}>
+                      {diff !== 0 ? (acima ? `+${fmt(diff)}` : fmt(diff)) : "—"}
+                    </td>
+                    <td style={{ ...P.td, textAlign:"right", color:"#555" }}>{pct.toFixed(1)}%</td>
+                    <td style={P.td}>
+                      <button style={{ ...P.iBtn, fontSize:11 }} onClick={() => removeCat(g.catId)} title="Remover">✕</button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop:"2px solid #333" }}>
+                <td style={{ ...P.td, color:"#fff", fontWeight:700 }}>TOTAL</td>
+                <td style={{ ...P.td, textAlign:"right", color:"#aaa", fontWeight:700 }}>{fmt(totalPrevisto)}</td>
+                <td style={{ ...P.td, textAlign:"right", color:"#F5C518", fontWeight:800, fontSize:14 }}>{fmt(totalReal)}</td>
+                <td style={{ ...P.td, textAlign:"right", color: totalReal>totalPrevisto?"#ff6666":"#00cc66", fontWeight:700 }}>
+                  {fmt(totalReal - totalPrevisto)}
+                </td>
+                <td style={{ ...P.td, textAlign:"right", color:"#555" }}>100%</td>
+                <td style={P.td}></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <p style={P.note}>Clique nos valores de Previsto ou Real para editar diretamente na tabela.</p>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COTAÇÕES
+// ═══════════════════════════════════════════════════════════════════════════════
+function ScreenCotacoes({ quotes, isMobile, onFetch, onUpdateWatchlist, qLoading, settings }) {
+  const [editSection, setEditSection] = useState(null);
+  const [editInput,   setEditInput]   = useState("");
+
+  const wl   = quotes?.watchlist  || DEF_WATCHLIST;
+  const data = quotes?.data       || { currencies:{}, br:{}, us:{}, crypto:{} };
+
+  const SECTIONS = [
+    { key:"currencies", label:"💵 Moedas",       unit:"BRL", color:"#e2c97e", hint:"USD, EUR, GBP..." },
+    { key:"br",         label:"📈 Ações BR",     unit:"BRL", color:"#7ecfb3", hint:"PETR4, VALE3..." },
+    { key:"us",         label:"🇺🇸 Ações EUA",   unit:"USD", color:"#60a5fa", hint:"AAPL, MSFT..."   },
+    { key:"crypto",     label:"₿ Crypto",        unit:"USD", color:"#f7931a", hint:"BTC, ETH..."     },
+  ];
+
+  function startEdit(key) {
+    setEditSection(key);
+    setEditInput((wl[key] || []).join(", "));
+  }
+
+  function saveEdit(key) {
+    const tickers = editInput.split(/[,\s]+/).map(t => t.trim().toUpperCase()).filter(Boolean);
+    onUpdateWatchlist(key, tickers);
+    setEditSection(null);
+  }
+
+  function fmtQuote(val) {
+    if (val === null || val === undefined) return "—";
+    if (val >= 1000) return val.toLocaleString("pt-BR", { maximumFractionDigits:0 });
+    return val.toLocaleString("pt-BR", { minimumFractionDigits:2, maximumFractionDigits:2 });
+  }
+
+  function changePctColor(pct) {
+    if (!pct && pct !== 0) return "#6a6458";
+    return pct >= 0 ? "#7ecfb3" : "#e27e9a";
+  }
+
+  function changePctStr(pct) {
+    if (!pct && pct !== 0) return "—";
+    return (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%";
+  }
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Cotações" subtitle="Estimativas via Claude — sincroniza USD/EUR com o portfólio">
+        <Btn onClick={() => onFetch(wl)} disabled={qLoading}>
+          {qLoading ? "Buscando..." : <span style={{display:"flex",alignItems:"center",gap:7}}><Icon name="refresh" size={14}/> Atualizar</span>}
+        </Btn>
+      </PageHeader>
+
+      {quotes?.updatedAt && (
+        <div style={{ fontSize:11, color:"#555", fontFamily:"'IBM Plex Mono',monospace", marginBottom:20 }}>
+          Última atualização: {quotes.updatedAt}
+        </div>
+      )}
+
+      {quotes?.data?.cdi && (
+        <div style={{ background:"#111", border:"1px solid #F5C51844", borderRadius:14, padding:"16px 20px", marginBottom:20, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
+          <div style={{ fontSize:32 }}>📡</div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:10, color:"#555", textTransform:"uppercase", letterSpacing:1.5, fontFamily:"'IBM Plex Mono',monospace", marginBottom:4 }}>Taxa CDI — atualizada automaticamente</div>
+            <div style={{ fontSize:28, fontWeight:800, color:"#F5C518", fontFamily:"'IBM Plex Mono',monospace", letterSpacing:-1 }}>
+              {fmtP(quotes.data.cdi)}
+              <span style={{ fontSize:13, color:"#555", marginLeft:8, fontWeight:400 }}>ao ano</span>
+            </div>
+          </div>
+          <div style={{ background:"#001a00", border:"1px solid #00cc6633", borderRadius:8, padding:"6px 14px", fontSize:11, color:"#00cc66", fontFamily:"'IBM Plex Mono',monospace" }}>
+            ✓ Sincronizado com o portfólio
+          </div>
+        </div>
+      )}
+
+      {quotes?.error && (
+        <div style={{ background:"#1a0000", border:"1px solid #cc000044", borderRadius:10, padding:"14px 16px", marginBottom:20, fontSize:11, color:"#ff6666", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.8 }}>
+          <strong>✗ Erro na última busca:</strong><br/>
+          {quotes.error}<br/>
+          <span style={{ color:"#555" }}>Tente novamente ou verifique sua conexão com a internet.</span>
+        </div>
+      )}
+
+      {!quotes?.updatedAt && !quotes?.error && (
+        <div style={{ background:"#111", border:"1px solid #333", borderRadius:10, padding:"14px 18px", marginBottom:20, fontSize:12, color:"#888", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.7 }}>
+          ℹ️ Clique em <strong style={{ color:"#F5C518" }}>↻ Atualizar tudo</strong> para buscar cotações e taxa CDI via Claude.<br/>
+          <span style={{ color:"#555" }}>Necessário configurar a chave de API em Configurações.</span>
+        </div>
+      )}
+
+      <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:20 }}>
+        {SECTIONS.map(sec => {
+          const tickers   = wl[sec.key] || [];
+          const secData   = data[sec.key] || {};
+          const isEditing = editSection === sec.key;
+
+          return (
+            <div key={sec.key} style={{ ...P.chartCard, borderColor:sec.color+"33" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+                <div style={{ ...P.chartTitle, color:sec.color, marginBottom:0 }}>{sec.label}</div>
+                <button style={{ ...P.iBtn, fontSize:11, padding:"3px 10px" }} onClick={() => isEditing ? saveEdit(sec.key) : startEdit(sec.key)}>
+                  {isEditing ? "✓ Salvar" : "✏️ Editar"}
+                </button>
+              </div>
+
+              {isEditing ? (
+                <div>
+                  <div style={{ fontSize:11, color:"#6a6458", fontFamily:"IBM Plex Mono,monospace", marginBottom:6 }}>
+                    Tickers separados por vírgula ({sec.hint})
+                  </div>
+                  <input
+                    style={{ ...P.input, marginBottom:8 }}
+                    value={editInput}
+                    onChange={e => setEditInput(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && saveEdit(sec.key)}
+                    placeholder={sec.hint}
+                    autoFocus
+                  />
+                  <div style={{ display:"flex", gap:8 }}>
+                    <Btn onClick={() => saveEdit(sec.key)}>Salvar</Btn>
+                    <BtnCancel onClick={() => setEditSection(null)}>Cancelar</BtnCancel>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  {tickers.length === 0 ? (
+                    <div style={{ color:"#4a4438", fontSize:12, fontFamily:"IBM Plex Mono,monospace", padding:"8px 0" }}>
+                      Nenhum ticker. Clique em ✏️ Editar para adicionar.
+                    </div>
+                  ) : (
+                    <div>
+                      {/* Header row */}
+                      <div style={{ display:"grid", gridTemplateColumns:"1fr auto auto auto", gap:8, paddingBottom:8, borderBottom:"1px solid #1e1c16", marginBottom:4 }}>
+                        <span style={{ fontSize:10, color:"#5a5448", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", letterSpacing:.8 }}>Ativo</span>
+                        <span style={{ fontSize:10, color:"#5a5448", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", letterSpacing:.8, textAlign:"right" }}>Preço</span>
+                        <span style={{ fontSize:10, color:"#5a5448", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", letterSpacing:.8, textAlign:"right" }}>Var.</span>
+                        <span style={{ fontSize:10, color:"#5a5448", textTransform:"uppercase", fontFamily:"IBM Plex Mono,monospace", letterSpacing:.8, textAlign:"right" }}>%</span>
+                      </div>
+                      {tickers.map(ticker => {
+                        const q = secData[ticker];
+                        const hasData = q && q.price !== null && q.price !== undefined;
+                        const pctColor = changePctColor(q?.changePct);
+                        return (
+                          <div key={ticker} style={{ display:"grid", gridTemplateColumns:"1fr auto auto auto", gap:8, padding:"8px 0", borderBottom:"1px solid #191714", alignItems:"center" }}>
+                            <div>
+                              <span style={{ color:"#d4cfc5", fontWeight:700, fontFamily:"IBM Plex Mono,monospace", fontSize:13 }}>{ticker}</span>
+                              <span style={{ marginLeft:6, fontSize:10, color:"#5a5448", fontFamily:"IBM Plex Mono,monospace" }}>{sec.unit}</span>
+                            </div>
+                            <span style={{ color: hasData ? sec.color : "#4a4438", fontWeight:700, fontFamily:"IBM Plex Mono,monospace", fontSize:13, textAlign:"right" }}>
+                              {hasData ? fmtQuote(q.price) : (qLoading ? "..." : "—")}
+                            </span>
+                            <span style={{ color: pctColor, fontFamily:"IBM Plex Mono,monospace", fontSize:11, textAlign:"right" }}>
+                              {hasData ? fmtQuote(q.change) : "—"}
+                            </span>
+                            <span style={{ color: pctColor, fontWeight:600, fontFamily:"IBM Plex Mono,monospace", fontSize:11, textAlign:"right", minWidth:52 }}>
+                              {hasData ? changePctStr(q.changePct) : "—"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Portfolio sync note for currencies */}
+              {sec.key === "currencies" && (data.currencies?.USD?.price || data.currencies?.EUR?.price) && (
+                <div style={{ marginTop:10, padding:"8px 10px", background:"#081f12", border:"1px solid #7ecfb344", borderRadius:6, fontSize:10, color:"#7ecfb3", fontFamily:"IBM Plex Mono,monospace" }}>
+                  ✓ USD e EUR sincronizados com o portfólio automaticamente.
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Tela de Login + Solicitação de acesso ────────────────────────────────────
+// Duas views num único componente: "login" e "register"
+// Separadas aqui por responsabilidade, unificadas pela navegação entre elas
+function ScreenLogin({ onLogin }) {
+  const [view, setView] = useState("login"); // "login" | "register" | "success"
+
+  if (view === "register") {
+    return <ViewRegister onBack={() => setView("login")} onSuccess={() => setView("success")} />;
+  }
+  if (view === "success") {
+    return <ViewRegisterSuccess onBack={() => setView("login")} />;
+  }
+  return <ViewLogin onLogin={onLogin} onRegister={() => setView("register")} />;
+}
+
+// ─── View: formulário de login ────────────────────────────────────────────────
+function ViewLogin({ onLogin, onRegister }) {
+  const [email,    setEmail]    = useState("");
+  const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState("");
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!email.trim() || !password) { setError("Preencha e-mail e senha."); return; }
+    setLoading(true);
+    setError("");
+    try {
+      const data = await apiCall("POST", "/auth/login", { email: email.trim(), password });
+      onLogin(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <AuthLayout subtitle="Entre na sua conta">
+      <form onSubmit={handleSubmit} style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        <div>
+          <label style={P.label}>E-mail</label>
+          <input style={P.input} type="email" value={email}
+            onChange={e => setEmail(e.target.value)}
+            placeholder="seu@email.com" autoComplete="email" autoFocus />
+        </div>
+        <div>
+          <label style={P.label}>Senha</label>
+          <div style={{ position:"relative" }}>
+            <input style={{ ...P.input, paddingRight:44 }}
+              type={showPass ? "text" : "password"}
+              value={password} onChange={e => setPassword(e.target.value)}
+              placeholder="••••••••" autoComplete="current-password" />
+            <button type="button" onClick={() => setShowPass(s => !s)}
+              style={{ position:"absolute", right:12, top:"50%", transform:"translateY(-50%)", background:"none", border:"none", cursor:"pointer", color:"#555", fontSize:16 }}>
+              {showPass ? "🙈" : "👁️"}
+            </button>
+          </div>
+        </div>
+
+        <AuthError message={error} />
+
+        <button type="submit" disabled={loading}
+          style={{ ...P.btn, width:"100%", justifyContent:"center", padding:"13px", fontSize:15, marginTop:4, opacity:loading?0.6:1, cursor:loading?"not-allowed":"pointer" }}>
+          {loading ? "Entrando..." : "Entrar"}
+        </button>
+      </form>
+
+      <div style={{ textAlign:"center", marginTop:20 }}>
+        <span style={{ fontSize:13, color:"#555" }}>Não tem acesso? </span>
+        <button onClick={onRegister}
+          style={{ background:"none", border:"none", color:T.accent, fontSize:13, cursor:"pointer", fontWeight:600, padding:0 }}>
+          Solicitar acesso
+        </button>
+      </div>
+    </AuthLayout>
+  );
+}
+
+// ─── View: formulário de solicitação de acesso ────────────────────────────────
+function ViewRegister({ onBack, onSuccess }) {
+  const [form,    setForm]    = useState({ name:"", email:"", password:"", confirm:"" });
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState("");
+
+  function updateField(field, value) {
+    setForm(f => ({ ...f, [field]: value }));
+  }
+
+  function validate() {
+    if (!form.name.trim())         return "Nome é obrigatório.";
+    if (!form.email.trim())        return "E-mail é obrigatório.";
+    if (form.password.length < 6)  return "Senha deve ter pelo menos 6 caracteres.";
+    if (form.password !== form.confirm) return "As senhas não coincidem.";
+    return null;
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    const validationError = validate();
+    if (validationError) { setError(validationError); return; }
+
+    setLoading(true);
+    setError("");
+    try {
+      await apiCall("POST", "/auth/register", {
+        name:     form.name.trim(),
+        email:    form.email.trim(),
+        password: form.password,
+      });
+      onSuccess();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <AuthLayout subtitle="Solicitar acesso">
+      <form onSubmit={handleSubmit} style={{ display:"flex", flexDirection:"column", gap:14 }}>
+        <div>
+          <label style={P.label}>Nome completo</label>
+          <input style={P.input} value={form.name}
+            onChange={e => updateField("name", e.target.value)}
+            placeholder="João Silva" autoFocus />
+        </div>
+        <div>
+          <label style={P.label}>E-mail</label>
+          <input style={P.input} type="email" value={form.email}
+            onChange={e => updateField("email", e.target.value)}
+            placeholder="seu@email.com" autoComplete="email" />
+        </div>
+        <div>
+          <label style={P.label}>Senha</label>
+          <input style={P.input} type="password" value={form.password}
+            onChange={e => updateField("password", e.target.value)}
+            placeholder="mínimo 6 caracteres" autoComplete="new-password" />
+        </div>
+        <div>
+          <label style={P.label}>Confirmar senha</label>
+          <input style={P.input} type="password" value={form.confirm}
+            onChange={e => updateField("confirm", e.target.value)}
+            placeholder="repita a senha" autoComplete="new-password" />
+        </div>
+
+        <div style={{ background:"#111", border:`1px solid ${T.border}`, borderRadius:9, padding:"10px 14px", fontSize:12, color:"#555", fontFamily:T.mono }}>
+          Sua solicitação ficará pendente até o administrador aprovar.
+        </div>
+
+        <AuthError message={error} />
+
+        <button type="submit" disabled={loading}
+          style={{ ...P.btn, width:"100%", justifyContent:"center", padding:"13px", fontSize:15, opacity:loading?0.6:1, cursor:loading?"not-allowed":"pointer" }}>
+          {loading ? "Enviando..." : "Solicitar acesso"}
+        </button>
+      </form>
+
+      <div style={{ textAlign:"center", marginTop:20 }}>
+        <button onClick={onBack}
+          style={{ background:"none", border:"none", color:"#555", fontSize:13, cursor:"pointer", padding:0 }}>
+          ← Voltar ao login
+        </button>
+      </div>
+    </AuthLayout>
+  );
+}
+
+// ─── View: confirmação de solicitação enviada ─────────────────────────────────
+function ViewRegisterSuccess({ onBack }) {
+  return (
+    <AuthLayout subtitle="">
+      <div style={{ textAlign:"center", padding:"20px 0" }}>
+        <div style={{ fontSize:48, marginBottom:16 }}>✅</div>
+        <h2 style={{ fontSize:20, fontWeight:700, color:"#fff", marginBottom:10 }}>Solicitação enviada!</h2>
+        <p style={{ fontSize:14, color:"#555", lineHeight:1.6, marginBottom:24 }}>
+          Sua solicitação foi recebida.<br/>
+          Você será notificado quando o administrador aprovar seu acesso.
+        </p>
+        <button onClick={onBack} style={{ ...P.btnSec, margin:"0 auto" }}>
+          Voltar ao login
+        </button>
+      </div>
+    </AuthLayout>
+  );
+}
+
+// ─── Componentes compartilhados da área de auth ───────────────────────────────
+function AuthLayout({ subtitle, children }) {
+  return (
+    <div style={{ minHeight:"100vh", background:T.bg, display:"flex", alignItems:"center", justifyContent:"center", padding:20, fontFamily:T.sans }}>
+      <div style={{ width:"100%", maxWidth:400 }}>
+        <div style={{ textAlign:"center", marginBottom:36 }}>
+          <div style={{ width:64, height:64, borderRadius:18, background:"#F5C518", display:"flex", alignItems:"center", justifyContent:"center", fontSize:36, margin:"0 auto 16px" }}>
+            🪙
+          </div>
+          <h1 style={{ fontSize:26, fontWeight:800, color:"#fff", letterSpacing:-1 }}>InvestPro</h1>
+          {subtitle && <p style={{ color:"#555", marginTop:6, fontSize:14 }}>{subtitle}</p>}
+        </div>
+        {children}
+        <p style={{ textAlign:"center", marginTop:28, fontSize:11, color:"#333", fontFamily:T.mono }}>
+          InvestPro · Dados protegidos com JWT
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function AuthError({ message }) {
+  if (!message) return null;
+  return (
+    <div style={{ background:"#1a0000", border:"1px solid #ef444433", borderRadius:9, padding:"10px 14px", fontSize:13, color:"#f87171", fontFamily:T.mono }}>
+      {message}
+    </div>
+  );
+}
+
+// ─── Role badge ───────────────────────────────────────────────────────────────
+function RoleBadge({ role }) {
+  const map = {
+    admin: { label:"Admin",     bg:"#F5C51822", color:"#F5C518" },
+    user:  { label:"Usuário",   bg:"#3b82f622", color:"#60a5fa" },
+    guest: { label:"Convidado", bg:"#22222244", color:"#888888" },
+  };
+  const r = map[role] || map.guest;
+  return (
+    <span style={{ fontSize:10, fontWeight:700, fontFamily:T.mono, textTransform:"uppercase", letterSpacing:1, background:r.bg, color:r.color, padding:"3px 9px", borderRadius:20 }}>
+      {r.label}
+    </span>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN PANEL
+// ═══════════════════════════════════════════════════════════════════════════════
+const MODULE_LABELS = {
+  dashboard:   "Dashboard",
+  investments: "Investimentos",
+  renda:       "Minha Renda",
+  history:     "Aportes",
+  comparator:  "Comparador",
+  projection:  "Projeção",
+  quotes:      "Cotações",
+  categories:  "Categorias",
+  settings:    "Config.",
+};
+
+const ADMIN_TABS = [
+  { id:"users",       label:"Usuários"       },
+  { id:"pending",     label:"Solicitações"   },
+  { id:"new",         label:"Novo usuário"   },
+  { id:"permissions", label:"Permissões"     },
+];
+
+function ScreenAdmin({ auth, isMobile }) {
+  const [users,     setUsers]     = useState([]);
+  const [pending,   setPending]   = useState([]);
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState("");
+  const [newUser,   setNewUser]   = useState({ name:"", email:"", password:"", role:"user" });
+  const [saving,    setSaving]    = useState(false);
+  const [editId,    setEditId]    = useState(null);
+  const [modules,   setModules]   = useState({});
+  const [activeTab, setActiveTab] = useState("users");
+
+  const editingUser = users.find(u => u.id === editId);
+
+  async function loadAll() {
+    setLoading(true);
+    setError("");
+    try {
+      const [usersData, pendingData] = await Promise.all([
+        apiCall("GET", "/admin/users",   null, auth.token),
+        apiCall("GET", "/admin/pending", null, auth.token),
+      ]);
+      setUsers(usersData);
+      setPending(pendingData);
+      const mods = {};
+      usersData.forEach(u => { mods[u.id] = u.modules || []; });
+      setModules(mods);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadAll(); }, []);
+
+  async function approveUser(userId, role = "user") {
+    try {
+      await apiCall("PUT", `/admin/pending/${userId}/approve`, { role }, auth.token);
+      await loadAll();
+    } catch (err) { setError(err.message); }
+  }
+
+  async function rejectUser(userId) {
+    if (!window.confirm("Recusar esta solicitação?")) return;
+    try {
+      await apiCall("PUT", `/admin/pending/${userId}/reject`, null, auth.token);
+      await loadAll();
+    } catch (err) { setError(err.message); }
+  }
+
+  async function createUser() {
+    if (!newUser.name || !newUser.email || !newUser.password) return;
+    setSaving(true);
+    try {
+      await apiCall("POST", "/admin/users", newUser, auth.token);
+      setNewUser({ name:"", email:"", password:"", role:"user" });
+      await loadAll();
+      setActiveTab("users");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleModule(userId, module) {
+    const current = modules[userId] || [];
+    const updated  = current.includes(module)
+      ? current.filter(m => m !== module)
+      : [...current, module];
+
+    // Optimistic update — reverte se der erro
+    setModules(m => ({ ...m, [userId]: updated }));
+    try {
+      await apiCall("PUT", `/admin/users/${userId}/modules`, { modules: updated }, auth.token);
+    } catch (err) {
+      setModules(m => ({ ...m, [userId]: current }));
+      setError(err.message);
+    }
+  }
+
+  async function toggleActive(user) {
+    try {
+      await apiCall("PUT", `/admin/users/${user.id}`, { active: !user.active }, auth.token);
+      await loadAll();
+    } catch (err) { setError(err.message); }
+  }
+
+  async function deleteUser(id) {
+    if (!window.confirm("Remover este usuário permanentemente?")) return;
+    try {
+      await apiCall("DELETE", `/admin/users/${id}`, null, auth.token);
+      await loadAll();
+    } catch (err) { setError(err.message); }
+  }
+
+  return (
+    <div style={P.root}>
+      <PageHeader title="Painel Admin" subtitle="Gerencie usuários e permissões de acesso" />
+
+      {error && (
+        <div style={{ background:"#1a0000", border:"1px solid #ef444433", borderRadius:10, padding:"12px 16px", marginBottom:20, fontSize:13, color:"#f87171", fontFamily:T.mono, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span>✗ {error}</span>
+          <button onClick={() => setError("")} style={{ background:"none", border:"none", color:"#f87171", cursor:"pointer", fontSize:16 }}>×</button>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div style={{ display:"flex", gap:4, marginBottom:24, background:T.surface2, borderRadius:12, padding:4, border:`1px solid ${T.border}`, width:"fit-content", flexWrap:"wrap" }}>
+        {ADMIN_TABS.map(tab => (
+          <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+            style={{ ...P.toggleBtn, ...(activeTab===tab.id ? P.toggleActive : {}), padding:"8px 16px", fontSize:13, position:"relative" }}>
+            {tab.label}
+            {tab.id === "pending" && pending.length > 0 && (
+              <span style={{ position:"absolute", top:-4, right:-4, width:18, height:18, borderRadius:50, background:"#ef4444", color:"#fff", fontSize:10, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                {pending.length}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Usuários ativos ── */}
+      {activeTab === "users" && (
+        <div style={P.chartCard}>
+          <div style={P.chartTitle}>Usuários ativos</div>
+          {loading ? (
+            <div style={{ color:"#555", fontFamily:T.mono, fontSize:13, padding:"20px 0" }}>Carregando...</div>
+          ) : users.length === 0 ? (
+            <Empty>Nenhum usuário cadastrado</Empty>
+          ) : (
+            <div style={{ overflowX:"auto" }}>
+              <table style={P.table}>
+                <thead><tr>
+                  <th style={P.th}>Nome</th>
+                  <th style={P.th}>E-mail</th>
+                  <th style={P.th}>Perfil</th>
+                  <th style={P.th}>Status</th>
+                  <th style={P.th}>Módulos</th>
+                  <th style={P.th}></th>
+                </tr></thead>
+                <tbody>
+                  {users.map(u => (
+                    <tr key={u.id} style={P.tr} className="tr-hover">
+                      <td style={{ ...P.td, color:"#fff", fontWeight:600 }}>{u.name}</td>
+                      <td style={{ ...P.td, fontFamily:T.mono, fontSize:11 }}>{u.email}</td>
+                      <td style={P.td}><RoleBadge role={u.role} /></td>
+                      <td style={P.td}>
+                        <button onClick={() => toggleActive(u)}
+                          style={{ fontSize:11, fontFamily:T.mono, background:u.active?"#22c55e22":"#ef444422", color:u.active?"#22c55e":"#ef4444", border:`1px solid ${u.active?"#22c55e33":"#ef444433"}`, borderRadius:20, padding:"3px 12px", cursor:"pointer" }}>
+                          {u.active ? "Ativo" : "Inativo"}
+                        </button>
+                      </td>
+                      <td style={{ ...P.td, color:"#555", fontSize:12 }}>{(modules[u.id]||[]).length} módulos</td>
+                      <td style={P.td}>
+                        <div style={{ display:"flex", gap:6 }}>
+                          <IBtn onClick={() => { setEditId(u.id); setActiveTab("permissions"); }} title="Editar permissões" iconName="edit" />
+                          {u.role !== "admin" && <IBtn onClick={() => deleteUser(u.id)} title="Remover" iconName="trash" />}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Solicitações pendentes ── */}
+      {activeTab === "pending" && (
+        <div style={P.chartCard}>
+          <div style={P.chartTitle}>Solicitações aguardando aprovação</div>
+          {loading ? (
+            <div style={{ color:"#555", fontFamily:T.mono, fontSize:13, padding:"20px 0" }}>Carregando...</div>
+          ) : pending.length === 0 ? (
+            <Empty>Nenhuma solicitação pendente</Empty>
+          ) : (
+            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+              {pending.map(u => (
+                <div key={u.id} style={{ display:"flex", alignItems:"center", gap:16, padding:"14px 16px", background:T.surface2, borderRadius:10, border:`1px solid ${T.border}`, flexWrap:"wrap" }}>
+                  <div style={{ flex:1, minWidth:120 }}>
+                    <div style={{ fontSize:14, fontWeight:600, color:"#fff" }}>{u.name}</div>
+                    <div style={{ fontSize:11, color:"#555", fontFamily:T.mono, marginTop:2 }}>{u.email}</div>
+                    <div style={{ fontSize:11, color:"#444", marginTop:4 }}>
+                      Solicitado em {new Date(u.created_at).toLocaleDateString("pt-BR")}
+                    </div>
+                  </div>
+                  <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>
+                    <select
+                      defaultValue="user"
+                      id={`role-${u.id}`}
+                      style={{ ...P.input, width:"auto", padding:"6px 10px", fontSize:12 }}>
+                      <option value="user">Usuário</option>
+                      <option value="guest">Convidado</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button
+                      onClick={() => approveUser(u.id, document.getElementById(`role-${u.id}`).value)}
+                      style={{ ...P.btn, padding:"7px 16px", fontSize:12 }}>
+                      Aprovar
+                    </button>
+                    <button
+                      onClick={() => rejectUser(u.id)}
+                      style={{ ...P.btnCancel, padding:"7px 16px", fontSize:12, color:"#ef4444", borderColor:"#ef444433" }}>
+                      Recusar
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Novo usuário ── */}
+      {activeTab === "new" && (
+        <div style={{ ...P.chartCard, maxWidth:500 }}>
+          <div style={P.chartTitle}>Criar usuário diretamente</div>
+          <label style={P.label}>Nome completo</label>
+          <input style={P.input} value={newUser.name} placeholder="João Silva"
+            onChange={e => setNewUser(u => ({ ...u, name:e.target.value }))} />
+          <label style={P.label}>E-mail</label>
+          <input style={P.input} type="email" value={newUser.email} placeholder="joao@email.com"
+            onChange={e => setNewUser(u => ({ ...u, email:e.target.value }))} />
+          <label style={P.label}>Senha inicial</label>
+          <input style={P.input} type="password" value={newUser.password} placeholder="mínimo 6 caracteres"
+            onChange={e => setNewUser(u => ({ ...u, password:e.target.value }))} />
+          <label style={P.label}>Perfil</label>
+          <select style={{ ...P.input, cursor:"pointer" }} value={newUser.role}
+            onChange={e => setNewUser(u => ({ ...u, role:e.target.value }))}>
+            <option value="user">Usuário — acesso padrão</option>
+            <option value="guest">Convidado — acesso limitado</option>
+            <option value="admin">Admin — acesso total</option>
+          </select>
+          <p style={{ ...P.note, marginTop:12 }}>
+            Usuário criado aqui já entra como ativo, sem precisar de aprovação.
+          </p>
+          <div style={{ marginTop:16 }}>
+            <Btn onClick={createUser} disabled={saving}>
+              {saving ? "Criando..." : "Criar usuário"}
+            </Btn>
+          </div>
+        </div>
+      )}
+
+      {/* ── Permissões ── */}
+      {activeTab === "permissions" && (
+        <div>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:20 }}>
+            {users.filter(u => u.role !== "admin").map(u => (
+              <button key={u.id} onClick={() => setEditId(u.id)}
+                style={{ padding:"8px 16px", borderRadius:20, border:"1px solid", fontSize:12, cursor:"pointer", fontFamily:T.mono, background:editId===u.id?T.accentDim:T.surface, color:editId===u.id?T.accent:"#aaa", borderColor:editId===u.id?T.accent:T.border2 }}>
+                {u.name}
+              </button>
+            ))}
+          </div>
+
+          {editingUser ? (
+            <div style={P.chartCard}>
+              <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20 }}>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:15, fontWeight:700, color:"#fff" }}>{editingUser.name}</div>
+                  <div style={{ fontSize:11, color:"#555", fontFamily:T.mono, marginTop:2 }}>{editingUser.email}</div>
+                </div>
+                <RoleBadge role={editingUser.role} />
+              </div>
+              <div style={{ display:"grid", gridTemplateColumns:isMobile?"1fr":"1fr 1fr", gap:8 }}>
+                {Object.entries(MODULE_LABELS).map(([mod, label]) => {
+                  const enabled = (modules[editingUser.id] || []).includes(mod);
+                  return (
+                    <button key={mod} onClick={() => toggleModule(editingUser.id, mod)}
+                      style={{ display:"flex", alignItems:"center", gap:12, padding:"12px 16px", borderRadius:10, background:enabled?T.accentDim:T.surface2, border:`1px solid ${enabled?T.accent:T.border}`, cursor:"pointer", transition:"all .15s", textAlign:"left" }}>
+                      <div style={{ width:18, height:18, borderRadius:5, background:enabled?T.accent:"#2a2a2a", border:`2px solid ${enabled?T.accent:"#444"}`, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:11, color:"#000", fontWeight:800 }}>
+                        {enabled ? "✓" : ""}
+                      </div>
+                      <span style={{ fontSize:13, color:enabled?"#fff":"#666", fontWeight:enabled?600:400 }}>{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p style={P.note}>Alterações salvas automaticamente.</p>
+            </div>
+          ) : (
+            <Empty>Selecione um usuário acima para editar suas permissões.</Empty>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MODALS
+// ═══════════════════════════════════════════════════════════════════════════════
+function InvModal({ data, cats, isMobile, onSave, onClose }) {
+  const [form, setForm] = useState({
+    id:          data.id,
+    nome:        data.nome || "",
+    tipo:        data.tipo || "cdb",
+    valor:       data.valor ? String(data.valor) : "",
+    pct:         data.pct  ? String(data.pct)   : "",
+    data:        data.data || new Date().toISOString().split("T")[0],
+    vencimento:  data.vencimento || "",
+    categoriaId: data.categoriaId || null,
+  });
+
+  const t = getType(form.tipo);
+
+  return (
+    <Overlay onClose={onClose} isMobile={isMobile}>
+      <ModalBox isMobile={isMobile} maxW={500}>
+        <div style={M.title}>{data.id ? "Editar" : "Novo"} Investimento</div>
+
+        <label style={P.label}>Tipo</label>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:6, marginBottom:4 }}>
+          {TYPES.map(tp => (
+            <button key={tp.id} onClick={() => setForm(f => ({ ...f, tipo:tp.id }))}
+              style={{ ...M.typeBtn, ...(form.tipo===tp.id ? { borderColor:tp.color, color:tp.color, background:tp.color+"18" } : {}) }}>
+              <span style={{ fontSize:14 }}>{tp.icon}</span>
+              <span style={{ fontSize:9 }}>{tp.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {t.intl && (
+          <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"8px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginBottom:4 }}>
+            🌍 Ativo em {t.currency}. Convertido para BRL via câmbio configurado.
+          </div>
+        )}
+
+        <label style={P.label}>Nome</label>
+        <input style={P.input} value={form.nome} onChange={e => setForm(f => ({ ...f, nome:e.target.value }))} placeholder={`Ex: ${t.label} XP`} />
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div>
+            <label style={P.label}>Valor {t.currency ? `(${t.currency})` : "(R$)"}</label>
+            <input style={P.input} type="number" value={form.valor} onChange={e => setForm(f => ({ ...f, valor:e.target.value }))} placeholder="10000" />
+          </div>
+          <div>
+            <label style={P.label}>{t.intl ? "Retorno a.a. (%)" : "% CDI"}</label>
+            <input style={P.input} type="number" value={form.pct} onChange={e => setForm(f => ({ ...f, pct:e.target.value }))} placeholder={t.intl ? "12" : "100"} />
+          </div>
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          <div>
+            <label style={P.label}>Data de Início</label>
+            <input style={{ ...P.input, colorScheme:"dark" }} type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data:e.target.value }))} />
+          </div>
+          <div>
+            <label style={P.label}>Vencimento (opcional)</label>
+            <input style={{ ...P.input, colorScheme:"dark" }} type="date" value={form.vencimento} onChange={e => setForm(f => ({ ...f, vencimento:e.target.value }))} />
+          </div>
+        </div>
+
+        {cats.length > 0 && (
+          <>
+            <label style={P.label}>Categoria (opcional)</label>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:8, marginBottom:8 }}>
+              <button style={{ ...M.catChip, ...(form.categoriaId===null ? M.catChipActive : {}) }} onClick={() => setForm(f => ({ ...f, categoriaId:null }))}>Nenhuma</button>
+              {cats.map(cat => (
+                <button key={cat.id} onClick={() => setForm(f => ({ ...f, categoriaId:cat.id }))}
+                  style={{ ...M.catChip, ...(form.categoriaId===cat.id ? { borderColor:cat.cor, color:cat.cor, background:cat.cor+"18" } : {}) }}>
+                  {cat.nome}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {t.ir
+          ? <div style={M.irNote}>⚠️ {t.label} tem IR regressivo (22,5% → 15%)</div>
+          : <div style={{ ...M.irNote, borderColor:"#7ecfb344", color:"#7ecfb3", background:"#7ecfb308" }}>✓ {t.label} é isento de IR</div>
+        }
+
+        <div style={M.actions}>
+          <BtnCancel onClick={onClose}>Cancelar</BtnCancel>
+          <Btn onClick={() => onSave(form)}>Salvar</Btn>
+        </div>
+      </ModalBox>
+    </Overlay>
+  );
+}
+
+function DepModal({ data, invs, isMobile, onSave, onClose }) {
+  const [form, setForm] = useState({
+    invId: data.invId || invs[0]?.id || null,
+    valor: "",
+    data:  new Date().toISOString().split("T")[0],
+    obs:   "",
+  });
+  return (
+    <Overlay onClose={onClose} isMobile={isMobile}>
+      <ModalBox isMobile={isMobile} maxW={400}>
+        <div style={M.title}>💰 Registrar Aporte</div>
+        <label style={P.label}>Investimento</label>
+        <select style={{ ...P.input, cursor:"pointer" }} value={form.invId || ""} onChange={e => setForm(f => ({ ...f, invId:parseInt(e.target.value) }))}>
+          {invs.map(inv => { const t = getType(inv.tipo); return <option key={inv.id} value={inv.id}>{t.icon} {inv.nome}</option>; })}
+        </select>
+        <label style={P.label}>Valor (R$)</label>
+        <input style={P.input} type="number" value={form.valor} onChange={e => setForm(f => ({ ...f, valor:e.target.value }))} placeholder="1000" />
+        <label style={P.label}>Data</label>
+        <input style={{ ...P.input, colorScheme:"dark" }} type="date" value={form.data} onChange={e => setForm(f => ({ ...f, data:e.target.value }))} />
+        <label style={P.label}>Observação (opcional)</label>
+        <input style={P.input} value={form.obs} onChange={e => setForm(f => ({ ...f, obs:e.target.value }))} placeholder="Ex: Aporte mensal" />
+        <div style={{ background:"#0e1520", border:"1px solid #1e3050", borderRadius:6, padding:"8px 12px", fontSize:11, color:"#7eb8e2", fontFamily:"IBM Plex Mono,monospace", marginTop:6 }}>
+          💡 O valor será somado ao saldo do investimento.
+        </div>
+        <div style={M.actions}>
+          <BtnCancel onClick={onClose}>Cancelar</BtnCancel>
+          <Btn onClick={() => onSave(form)}>Registrar</Btn>
+        </div>
+      </ModalBox>
+    </Overlay>
+  );
+}
+
+function CatModal({ data, isMobile, onSave, onClose }) {
+  const [form, setForm] = useState({ id:data.id, nome:data.nome||"", cor:data.cor||"#7ecfb3" });
+  const COLORS = ["#e2c97e","#7ecfb3","#7eb8e2","#b77ee2","#e27e9a","#e2a07e","#f7931a","#9a9a9a"];
+  return (
+    <Overlay onClose={onClose} isMobile={isMobile}>
+      <ModalBox isMobile={isMobile} maxW={360}>
+        <div style={M.title}>{data.id ? "Editar" : "Nova"} Categoria</div>
+        <label style={P.label}>Nome</label>
+        <input style={P.input} value={form.nome} onChange={e => setForm(f => ({ ...f, nome:e.target.value }))} onKeyDown={e => e.key==="Enter" && onSave(form)} placeholder="Ex: Renda Fixa" />
+        <label style={P.label}>Cor</label>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>
+          {COLORS.map(c => (
+            <button key={c} onClick={() => setForm(f => ({ ...f, cor:c }))}
+              style={{ width:28, height:28, borderRadius:6, background:c, border:form.cor===c?"2px solid #fff":"2px solid transparent", cursor:"pointer" }} />
+          ))}
+        </div>
+        <div style={M.actions}>
+          <BtnCancel onClick={onClose}>Cancelar</BtnCancel>
+          <Btn onClick={() => onSave(form)}>Salvar</Btn>
+        </div>
+      </ModalBox>
+    </Overlay>
+  );
+}
+
+function ImportModal({ isMobile, onImport, onClose }) {
+  const [err,  setErr]  = useState(null);
+  const [drag, setDrag] = useState(false);
+  const ref = useRef(null);
+
+  function handle(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const data = parseImport(e.target.result, file.name.endsWith(".csv"));
+        onImport(data);
+      } catch (_) {
+        setErr("Arquivo inválido. Use JSON ou CSV exportado pelo InvestPro.");
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  return (
+    <Overlay onClose={onClose} isMobile={isMobile}>
+      <ModalBox isMobile={isMobile} maxW={420}>
+        <div style={M.title}>⬆ Importar Dados</div>
+        <div
+          style={{ border:`2px dashed ${drag?"#e2c97e":"#2a2820"}`, borderRadius:10, padding:"32px 24px", textAlign:"center", background:drag?"#1e1c10":"#0e0d0b", transition:"all .2s", cursor:"pointer", marginBottom:8 }}
+          onDragOver={e => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={e => { e.preventDefault(); setDrag(false); handle(e.dataTransfer.files[0]); }}>
+          <div style={{ fontSize:32, marginBottom:8 }}>📂</div>
+          <div style={{ color:"#c9bfaa", fontSize:13, marginBottom:4 }}>Arraste um arquivo aqui</div>
+          <div style={{ color:"#6a6458", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginBottom:16 }}>JSON ou CSV exportado pelo InvestPro</div>
+          <BtnCancel onClick={() => ref.current?.click()}>Selecionar arquivo</BtnCancel>
+          <input ref={ref} type="file" accept=".json,.csv" style={{ display:"none" }} onChange={e => handle(e.target.files[0])} />
+        </div>
+        {err && <div style={{ background:"#1f0808", border:"1px solid #e27e9a44", borderRadius:6, padding:"9px 12px", fontSize:11, color:"#e27e9a", fontFamily:"IBM Plex Mono,monospace" }}>✗ {err}</div>}
+        <div style={{ color:"#4a4438", fontSize:11, fontFamily:"IBM Plex Mono,monospace", marginTop:6 }}>⚠️ A importação substituirá todos os dados atuais.</div>
+        <div style={M.actions}><BtnCancel onClick={onClose}>Cancelar</BtnCancel></div>
+      </ModalBox>
+    </Overlay>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MICRO COMPONENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+function PageHeader({ title, subtitle, children }) {
+  return (
+    <div style={P.pageHeader}>
+      <div>
+        <h1 style={P.pageTitle} className="page-title">{title}</h1>
+        {subtitle && <p style={P.pageSub}>{subtitle}</p>}
+      </div>
+      {children && <div style={{ display:"flex", gap:8, alignItems:"center", flexWrap:"wrap" }}>{children}</div>}
+    </div>
+  );
+}
+
+function KPI({ label, value, color, icon }) {
+  return (
+    <div style={P.kpiCard} className="card-hover">
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+        <div style={P.kpiLabel}>{label}</div>
+        <div style={{ width:34, height:34, borderRadius:9, background:color+"1a", display:"flex", alignItems:"center", justifyContent:"center", color, flexShrink:0 }}>
+          <Icon name={icon} size={16} />
+        </div>
+      </div>
+      <div style={{ ...P.kpiValue, color }} className="kpi-value">{value}</div>
+    </div>
+  );
+}
+
+function ChartCard({ title, children, action }) {
+  return (
+    <div style={P.chartCard}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+        <div style={P.chartTitle}>{title}</div>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function AlertRow({ name, sub, badge, badgeColor, urgent }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", padding:"12px 14px", marginBottom:8, background:"#0a0a0a", border:`1px solid ${urgent ? badgeColor+"33" : "#1a1a1a"}`, borderRadius:10, gap:12, transition:"border-color .2s" }}>
+      <div style={{ width:8, height:8, borderRadius:50, background:badgeColor, flexShrink:0, boxShadow:urgent?`0 0 8px ${badgeColor}66`:"none" }} />
+      <div style={{ flex:1 }}>
+        <div style={{ color:"#fff", fontWeight:600, fontSize:13 }}>{name}</div>
+        <div style={{ color:"#555", fontSize:11, fontFamily:"'IBM Plex Mono',monospace", marginTop:2 }}>{sub}</div>
+      </div>
+      <div style={{ color:badgeColor, fontWeight:700, fontFamily:"'IBM Plex Mono',monospace", fontSize:12, background:badgeColor+"18", padding:"3px 10px", borderRadius:20 }}>{badge}</div>
+    </div>
+  );
+}
+
+function Met({ label, value, accent }) {
+  return (
+    <div style={P.metricBox}>
+      <div style={P.metricLabel}>{label}</div>
+      <div style={{ ...P.metricValue, ...(accent ? { color:accent } : {}) }}>{value}</div>
+    </div>
+  );
+}
+
+function Chip({ active, onClick, color, children }) {
+  const c = color || "#F5C518";
+  return (
+    <button style={{ ...P.chip, ...(active ? { borderColor:c, color:c, background:c+"22", fontWeight:600 } : {}) }} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+function Toggle({ options, labels, value, onChange }) {
+  return (
+    <div style={{ display:"flex", gap:3, background:"#0a0a0a", borderRadius:10, padding:3, border:"1px solid #1a1a1a" }}>
+      {options.map((opt, i) => (
+        <button key={opt} style={{ ...P.toggleBtn, ...(value===opt ? P.toggleActive : {}) }} onClick={() => onChange(opt)}>
+          {labels[i]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Btn({ onClick, children, disabled }) {
+  return <button style={{ ...P.btn, ...(disabled?{opacity:.45,cursor:"not-allowed"}:{}) }} onClick={disabled?undefined:onClick} className={disabled?"":"btn-hover"}>{children}</button>;
+}
+
+function BtnSec({ onClick, children }) {
+  return <button style={P.btnSec} onClick={onClick} className="btn-hover">{children}</button>;
+}
+
+function BtnCancel({ onClick, children }) {
+  return <button style={P.btnCancel} onClick={onClick}>{children}</button>;
+}
+
+function IBtn({ onClick, title, children, iconName }) {
+  return (
+    <button style={P.iBtn} onClick={onClick} title={title} className="ibtn-hover">
+      {iconName ? <Icon name={iconName} size={14} /> : children}
+    </button>
+  );
+}
+
+function Overlay({ onClose, children, isMobile }) {
+  return (
+    <div style={{ ...M.overlay, alignItems:isMobile?"flex-end":"center" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()}>{children}</div>
+    </div>
+  );
+}
+
+function ModalBox({ children, isMobile, maxW }) {
+  return (
+    <div style={{ ...M.box, maxWidth:isMobile?"100vw":maxW, width:isMobile?"100vw":"100%", borderRadius:isMobile?"20px 20px 0 0":16, paddingBottom:isMobile?36:28 }}>
+      {children}
+    </div>
+  );
+}
+
+function Empty({ children }) { return <div style={P.empty}><div style={{ fontSize:32, marginBottom:12, opacity:.3 }}>◎</div>{children}</div>; }
+function Muted({ children }) { return <div style={{ color:"#444", fontSize:12, fontFamily:"'IBM Plex Mono',monospace", padding:"16px 0" }}>{children}</div>; }
+
+function SnapRestoreBtn({ snap, onRestore }) {
+  const [confirm, setConfirm] = useState(false);
+  if (confirm) {
+    return (
+      <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+        <span style={{ fontSize:11, color:"#F5C518", fontFamily:"'IBM Plex Mono',monospace" }}>Confirmar?</span>
+        <Btn onClick={() => { onRestore(snap); setConfirm(false); }}>Sim</Btn>
+        <BtnCancel onClick={() => setConfirm(false)}>Não</BtnCancel>
+      </div>
+    );
+  }
+  return (
+    <button style={{ ...P.btnSec, padding:"6px 14px", fontSize:11, display:"flex", alignItems:"center", gap:6 }} onClick={() => setConfirm(true)}>
+      <Icon name="restore" size={13} /> Restaurar
+    </button>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DESIGN SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+const T = {
+  // Colors
+  bg:       "#090909",
+  surface:  "#111111",
+  surface2: "#161616",
+  border:   "#1f1f1f",
+  border2:  "#2a2a2a",
+  text:     "#ffffff",
+  textSub:  "#888888",
+  textMuted:"#444444",
+  accent:   "#F5C518",
+  accentDim:"#F5C51822",
+  green:    "#22c55e",
+  red:      "#ef4444",
+  mono:     "'IBM Plex Mono',monospace",
+  sans:     "'Inter',sans-serif",
+};
+
+const S = {
+  app:          { display:"flex", minHeight:"100vh", background:T.bg, fontFamily:T.sans, color:T.text },
+  sidebar:      { position:"fixed", top:0, left:0, height:"100vh", background:T.surface, borderRight:`1px solid ${T.border}`, display:"flex", flexDirection:"column", zIndex:100, transition:"width .26s cubic-bezier(.4,0,.2,1)", overflow:"hidden" },
+  sidebarLogo:  { display:"flex", alignItems:"center", gap:12, padding:"18px 14px 14px", borderBottom:`1px solid ${T.border}`, flexShrink:0, cursor:"pointer", userSelect:"none", minHeight:68 },
+  logoText:     { fontSize:16, fontWeight:800, color:T.text, letterSpacing:-.4, whiteSpace:"nowrap" },
+  nav:          { flex:1, padding:"8px", display:"flex", flexDirection:"column", gap:2, overflowY:"auto" },
+  navItem:      { display:"flex", alignItems:"center", gap:11, padding:"10px 11px", borderRadius:10, background:"transparent", border:"none", color:"#aaaaaa", cursor:"pointer", transition:"background .15s, color .15s", fontSize:13, fontFamily:T.sans, fontWeight:500, width:"100%", whiteSpace:"nowrap" },
+  navActive:    { background:T.accent, color:"#000", fontWeight:700, boxShadow:`0 4px 16px ${T.accent}44` },
+  main:         { flex:1, minWidth:0, transition:"margin-left .26s cubic-bezier(.4,0,.2,1)" },
+  mobileBar:    { position:"fixed", top:0, left:0, right:0, height:56, background:T.surface, borderBottom:`1px solid ${T.border}`, display:"flex", alignItems:"center", gap:12, padding:"0 16px", zIndex:100 },
+  mobileCdi:    { marginLeft:"auto", fontSize:11, color:T.accent, fontFamily:T.mono, background:T.accentDim, padding:"4px 10px", borderRadius:20 },
+  hamburger:    { background:"transparent", border:"none", color:T.textSub, cursor:"pointer", display:"flex", alignItems:"center", padding:4, borderRadius:8, transition:"color .15s" },
+  drawerOverlay:{ position:"fixed", inset:0, background:"rgba(0,0,0,.75)", backdropFilter:"blur(6px)", zIndex:200, display:"flex" },
+  drawer:       { width:280, background:T.surface, borderRight:`1px solid ${T.border}`, height:"100%", display:"flex", flexDirection:"column", padding:"0 0 24px 0", overflowY:"auto" },
+  drawerHeader: { display:"flex", alignItems:"center", justifyContent:"space-between", padding:"18px 16px 14px", borderBottom:`1px solid ${T.border}`, flexShrink:0 },
+  drawerItem:   { display:"flex", alignItems:"center", gap:14, padding:"13px 20px", background:"transparent", border:"none", color:"#aaaaaa", cursor:"pointer", fontSize:14, fontFamily:T.sans, fontWeight:500, transition:"background .15s, color .15s", width:"100%", textAlign:"left", position:"relative" },
+  drawerItemActive:{ background:T.accentDim, color:T.accent, fontWeight:700 },
+  drawerActiveDot: { position:"absolute", right:16, width:6, height:6, borderRadius:50, background:T.accent },
+  alertBanner:  { position:"fixed", top:0, left:0, right:0, background:"#1a1200", borderBottom:`1px solid ${T.accent}33`, padding:"9px 20px", display:"flex", alignItems:"center", gap:10, zIndex:300, color:T.accent, fontFamily:T.mono, fontSize:11 },
+  toast:        { position:"fixed", padding:"13px 20px", borderRadius:12, border:"1px solid", fontSize:13, fontFamily:T.mono, zIndex:500, boxShadow:"0 8px 32px rgba(0,0,0,.6)" },
+};
+
+const P = {
+  root:        { maxWidth:1100, margin:"0 auto" },
+  pageHeader:  { display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:32, flexWrap:"wrap", gap:16 },
+  pageTitle:   { fontSize:30, fontWeight:800, color:T.text, letterSpacing:-1, lineHeight:1.1 },
+  pageSub:     { fontSize:13, color:T.textMuted, marginTop:6, fontWeight:400 },
+  kpiRow:      { display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(175px,1fr))", gap:12, marginBottom:24 },
+  kpiCard:     { background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, padding:"18px 20px" },
+  kpiLabel:    { fontSize:10, color:T.textMuted, textTransform:"uppercase", letterSpacing:1.5, fontFamily:T.mono },
+  kpiValue:    { fontSize:22, fontWeight:800, letterSpacing:-.5, fontFamily:T.mono },
+  metaCard:    { background:T.surface, border:`1px solid ${T.accent}33`, borderRadius:14, padding:"18px 20px", marginBottom:24 },
+  metaTrack:   { height:6, background:T.surface2, borderRadius:3, overflow:"hidden", marginTop:10 },
+  metaFill:    { height:6, background:`linear-gradient(90deg,#c9a020,${T.accent})`, borderRadius:3, transition:"width .6s cubic-bezier(.4,0,.2,1)" },
+  grid2:       { display:"grid", gap:14, marginBottom:18 },
+  chartCard:   { background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, padding:"20px 22px" },
+  chartTitle:  { fontSize:10, fontWeight:700, color:T.textMuted, textTransform:"uppercase", letterSpacing:1.6, fontFamily:T.mono },
+  filterRow:   { display:"flex", flexWrap:"wrap", gap:10, marginBottom:20, alignItems:"center" },
+  search:      { background:T.surface2, border:`1px solid ${T.border2}`, borderRadius:9, color:T.text, padding:"10px 14px", fontFamily:T.mono, fontSize:13, outline:"none", width:210, transition:"border-color .15s" },
+  chip:        { background:T.surface, border:`1px solid ${T.border2}`, borderRadius:20, padding:"6px 14px", color:T.textMuted, fontSize:12, fontFamily:T.mono, cursor:"pointer", transition:"all .15s", whiteSpace:"nowrap" },
+  cardGrid:    { display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))", gap:14 },
+  invCard:     { background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, padding:"20px", display:"flex", flexDirection:"column", gap:11 },
+  invCardTop:  { display:"flex", justifyContent:"space-between", alignItems:"flex-start" },
+  typeIcon:    { width:38, height:38, borderRadius:11, display:"flex", alignItems:"center", justifyContent:"center", fontSize:19, flexShrink:0 },
+  catTag:      { display:"inline-block", border:"1px solid", borderRadius:6, padding:"2px 10px", fontSize:11, fontFamily:T.mono },
+  pill:        { border:"1px solid", borderRadius:20, padding:"3px 10px", fontSize:11, fontFamily:T.mono },
+  metrics:     { display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 },
+  metricBox:   { background:T.bg, borderRadius:9, padding:"9px 12px", border:`1px solid ${T.border}` },
+  metricLabel: { color:T.textMuted, fontSize:9, textTransform:"uppercase", letterSpacing:1, fontFamily:T.mono },
+  metricValue: { color:"#ccc", fontSize:13, fontWeight:600, fontFamily:T.mono, marginTop:4 },
+  dateTag:     { color:T.textMuted, fontSize:11, fontFamily:T.mono },
+  setCard:     { background:T.surface, border:`1px solid ${T.border}`, borderRadius:14, padding:"22px 24px", marginBottom:14 },
+  setTitle:    { fontSize:10, fontWeight:700, color:T.textMuted, textTransform:"uppercase", letterSpacing:1.6, fontFamily:T.mono, marginBottom:18 },
+  toggleBtn:   { background:"transparent", border:"none", color:T.textMuted, borderRadius:7, padding:"7px 16px", fontFamily:T.sans, fontWeight:600, fontSize:12, cursor:"pointer", transition:"all .15s" },
+  toggleActive:{ background:T.accent, color:"#000", fontWeight:700 },
+  table:       { width:"100%", borderCollapse:"collapse", fontFamily:T.mono, fontSize:12 },
+  th:          { padding:"10px 16px", textAlign:"left", color:T.textMuted, fontWeight:600, fontSize:10, letterSpacing:1.1, textTransform:"uppercase", borderBottom:`1px solid ${T.border}`, whiteSpace:"nowrap" },
+  tr:          { borderBottom:`1px solid ${T.border}`, transition:"background .12s" },
+  td:          { padding:"11px 16px", color:"#aaa", whiteSpace:"nowrap" },
+  note:        { fontSize:10, color:T.textMuted, marginTop:10, fontFamily:T.mono, fontStyle:"italic" },
+  label:       { display:"block", fontSize:10, color:T.textMuted, textTransform:"uppercase", letterSpacing:1.3, fontFamily:T.mono, marginBottom:7, marginTop:16 },
+  input:       { background:T.bg, border:`1px solid ${T.border2}`, borderRadius:9, color:T.text, padding:"11px 14px", fontFamily:T.mono, fontSize:13, outline:"none", width:"100%", boxSizing:"border-box", transition:"border-color .15s" },
+  btn:         { background:T.accent, color:"#000", border:"none", padding:"11px 22px", borderRadius:10, fontFamily:T.sans, fontWeight:700, fontSize:13, cursor:"pointer", letterSpacing:.2, flexShrink:0, display:"inline-flex", alignItems:"center", gap:7 },
+  btnSec:      { background:"transparent", border:`1px solid ${T.border2}`, color:T.accent, padding:"10px 16px", borderRadius:10, fontFamily:T.sans, fontWeight:600, fontSize:12, cursor:"pointer", flexShrink:0, transition:"all .15s", display:"inline-flex", alignItems:"center", gap:7 },
+  btnCancel:   { background:"transparent", border:`1px solid ${T.border}`, color:T.textSub, borderRadius:10, padding:"10px 20px", fontFamily:T.sans, fontWeight:600, fontSize:13, cursor:"pointer" },
+  iBtn:        { background:"transparent", border:`1px solid ${T.border}`, borderRadius:7, padding:"6px 9px", fontSize:12, cursor:"pointer", color:T.textMuted, transition:"all .15s", display:"inline-flex", alignItems:"center", justifyContent:"center" },
+  empty:       { textAlign:"center", padding:"56px 24px", color:T.textMuted, background:T.surface, borderRadius:14, border:`1px solid ${T.border}`, fontFamily:T.mono, fontSize:13, lineHeight:2 },
+  sectionLabel:{ fontSize:10, color:T.textMuted, textTransform:"uppercase", letterSpacing:1.5, fontFamily:T.mono },
+};
+
+const M = {
+  overlay:       { position:"fixed", inset:0, background:"rgba(0,0,0,.88)", display:"flex", justifyContent:"center", zIndex:400, backdropFilter:"blur(10px)", padding:16 },
+  box:           { background:T.surface, border:`1px solid ${T.border2}`, padding:"28px 28px", maxHeight:"92vh", overflowY:"auto", display:"flex", flexDirection:"column", gap:6 },
+  title:         { fontSize:20, fontWeight:800, color:T.text, marginBottom:12, letterSpacing:-.4 },
+  typeBtn:       { background:T.bg, border:`1px solid ${T.border2}`, borderRadius:11, padding:"10px 4px", color:T.textMuted, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:4, fontFamily:T.mono, transition:"all .15s" },
+  catChip:       { background:T.bg, border:`1px solid ${T.border2}`, borderRadius:7, padding:"7px 13px", color:T.textMuted, fontSize:12, fontFamily:T.mono, cursor:"pointer", transition:"all .15s" },
+  catChipActive: { borderColor:T.accent, color:T.accent, background:T.accentDim },
+  irNote:        { background:"#ff000009", border:"1px solid #ef444433", borderRadius:9, padding:"10px 14px", fontSize:11, color:"#f87171", fontFamily:T.mono },
+  actions:       { display:"flex", gap:10, justifyContent:"flex-end", marginTop:20 },
+};
+
+const CSS = `
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --accent: #F5C518;
+  --bg: #090909;
+  --surface: #111111;
+  --border: #1f1f1f;
+  --text: #ffffff;
+  --text-sub: #888888;
+  --text-muted: #444444;
+  --green: #22c55e;
+  --red: #ef4444;
+  --radius: 14px;
+  --transition: .18s cubic-bezier(.4,0,.2,1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; -webkit-font-smoothing: antialiased; }
+
+/* Buttons */
+.btn-hover { transition: opacity var(--transition), transform .1s; cursor: pointer; }
+.btn-hover:hover { opacity: .88; transform: translateY(-1px); }
+.btn-hover:active { transform: translateY(0); }
+
+/* Cards */
+.card-hover { transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition); }
+.card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 36px rgba(0,0,0,.55); border-color: #333 !important; }
+
+/* Nav hover */
+.nav-hover:hover { background: #1f1f1f !important; color: #ffffff !important; }
+.ibtn-hover:hover { background: #1a1a1a !important; color: #fff !important; border-color: #333 !important; }
+
+/* Table row hover */
+.tr-hover:hover { background: #141414; }
+
+/* Inputs */
+input:focus, select:focus, textarea:focus { border-color: var(--accent) !important; box-shadow: 0 0 0 3px rgba(245,197,24,.08); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #444; }
+
+/* Select options */
+select option { background: #111; color: #fff; }
+
+/* Recharts tooltip global */
+.recharts-tooltip-wrapper { outline: none; }
+
+/* Mobile */
+@media (max-width: 767px) {
+  .kpi-row { grid-template-columns: 1fr 1fr !important; gap: 10px !important; margin-bottom: 18px !important; }
+  .kpi-value { font-size: 17px !important; }
+  .page-title { font-size: 24px !important; }
+  .filter-row { flex-direction: column !important; align-items: stretch !important; gap: 10px !important; }
+  .search-input { width: 100% !important; }
+  .card-hover:hover { transform: none; box-shadow: none; }
+}
+
+/* Tablet */
+@media (min-width: 768px) and (max-width: 1024px) {
+  .kpi-row { grid-template-columns: repeat(2, 1fr) !important; }
+}
+`;
+
+document.getElementById('loading').style.display = 'none';
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(App));
+  </script>
+</body>
+</html>
