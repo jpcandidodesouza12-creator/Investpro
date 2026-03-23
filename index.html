@@ -360,79 +360,23 @@ const DEF_QUOTES = {
   updatedAt: null,
 };
 
-async function fetchAllQuotes(watchlist, apiKey) {
-  if (!apiKey || !apiKey.trim()) throw new Error("Chave de API não configurada. Vá em Configurações → Chave da API Anthropic.");
+// ─── Cotações via backend (BCB + Brapi) ──────────────────────────────────────
+// Substitui a chamada direta à API Anthropic.
+// O backend busca BCB (CDI, PTAX) e Brapi (B3, crypto) com cache de 30 min.
+async function fetchAllQuotes(token) {
+  const data = await apiCall("GET", "/quotes", null, token);
 
-  const currencies = (watchlist.currencies || []).join(", ");
-  const br         = (watchlist.br         || []).join(", ");
-  const us         = (watchlist.us         || []).join(", ");
-  const crypto     = (watchlist.crypto     || []).join(", ");
-  const today      = new Date().toLocaleDateString("pt-BR");
-
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey.trim(),
-        "anthropic-version": "2023-06-01",
-        "anthropic-dangerous-direct-browser-access": "true",
-      },
-      body: JSON.stringify({
-        model: "claude-3-5-sonnet-20240620",
-        max_tokens: 2048,
-        system: "Você é um assistente financeiro. Responda APENAS com JSON válido, sem markdown, sem texto adicional.",
-        messages: [{
-          role: "user",
-          content: `Data: ${today}. Forneça cotações recentes e a taxa CDI atual do Brasil (% ao ano).
-Retorne SOMENTE este JSON (substitua pelos valores reais):
-{"cdi":14.75,"currencies":{"USD":{"price":5.72,"change":0.03,"changePct":0.52}},"br":{"PETR4":{"price":38.5,"change":-0.2,"changePct":-0.51}},"us":{"AAPL":{"price":175.3,"change":1.2,"changePct":0.69}},"crypto":{"BTC":{"price":85000,"change":1200,"changePct":1.43}}}
-Ativos: moedas BRL (${currencies}), ações BR (${br}), ações EUA USD (${us}), crypto USD (${crypto}). Use null se não encontrar.`,
-        }],
-      }),
-    });
-
-    const rawText = await res.text();
-
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status} — ${rawText.substring(0, 200)}`);
-    }
-
-    // Extrai o texto da resposta da API
-    const resp    = JSON.parse(rawText);
-    const allText = (resp.content || [])
-      .filter(b => b.type === "text")
-      .map(b => b.text || "")
-      .join("\n");
-
-    if (!allText.trim()) {
-      throw new Error(`Resposta vazia. stop_reason: ${resp.stop_reason}`);
-    }
-
-    // Estratégia 1: JSON direto no texto
-    const s = allText.indexOf("{");
-    const e = allText.lastIndexOf("}");
-    if (s !== -1 && e > s) {
-      try {
-        const parsed = JSON.parse(allText.slice(s, e + 1));
-        if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
-      } catch (_) { /* tenta próxima */ }
-    }
-
-    // Estratégia 2: bloco markdown ```json ... ```
-    const md = allText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (md) {
-      try {
-        const parsed = JSON.parse(md[1].trim());
-        if (parsed.currencies || parsed.br || parsed.us || parsed.crypto) return parsed;
-      } catch (_) { /* falha abaixo */ }
-    }
-
-    throw new Error(`JSON não encontrado na resposta: "${allText.substring(0, 150).replace(/\n/g, " ")}"`);
-
-  } catch (err) {
-    throw new Error(err.message || "Erro de rede ao buscar cotações.");
-  }
+  // Normaliza o formato do backend para o formato esperado pelo frontend
+  // Backend retorna: { cdi, currencies: { USD: { price } }, br: {}, us: {}, crypto: {} }
+  return {
+    cdi:       data.cdi,
+    currencies: data.currencies,
+    br:        data.br     || {},
+    us:        data.us     || {},
+    crypto:    data.crypto || {},
+    source:    data.source || "BCB + Brapi",
+    cached:    data.cached || false,
+  };
 }
 
 // ─── Tooltip ──────────────────────────────────────────────────────────────────
@@ -632,26 +576,30 @@ function App() {
     toast_("✓ Chave de API salva");
   }
 
-  async function fetchQuotes(watchlist) {
+  async function fetchQuotes() {
     setQLoading(true);
     try {
-      const data = await fetchAllQuotes(watchlist, apiKey);
+      const data = await fetchAllQuotes(auth?.token);
       const now  = new Date().toLocaleString("pt-BR");
-      const newQ = { ...quotes, watchlist, data, updatedAt: now, error: null };
+      const newQ = { ...quotes, data, updatedAt: now, error: null };
       setQuotes(newQ);
-      // Sync USD/EUR and CDI to settings
+
+      // Sincroniza CDI e câmbio com as configurações do portfólio
       const newFx = { ...settings.fx };
       if (data.currencies?.USD?.price) newFx.USD = data.currencies.USD.price;
       if (data.currencies?.EUR?.price) newFx.EUR = data.currencies.EUR.price;
       const newSet = { ...settings, fx: newFx };
       if (data.cdi && data.cdi > 0) newSet.cdiRate = data.cdi;
+
       setSettings(newSet);
       save(invs, cats, newSet, deps, nii, nci, ndi, newQ, renda);
-      const cdiMsg = data.cdi ? ` · CDI ${fmtP(data.cdi)}` : "";
-      toast_(`✓ Cotações atualizadas${cdiMsg} — ${now}`);
-    } catch (e) {
-      const msg = e.message || "Erro desconhecido";
-      const newQ = { ...quotes, watchlist, error: msg };
+
+      const cdiMsg    = data.cdi    ? ` · CDI ${fmtP(data.cdi)}` : "";
+      const cacheMsg  = data.cached ? " (cache)" : "";
+      toast_(`✓ Cotações atualizadas${cdiMsg}${cacheMsg} — ${now}`);
+    } catch (err) {
+      const msg  = err.message || "Erro desconhecido";
+      const newQ = { ...quotes, error: msg };
       setQuotes(newQ);
       save(invs, cats, settings, deps, nii, nci, ndi, newQ, renda);
       toast_(`✗ ${msg.substring(0, 80)}`, false);
@@ -1931,8 +1879,8 @@ function ScreenCotacoes({ quotes, isMobile, onFetch, onUpdateWatchlist, qLoading
   const data = quotes?.data       || { currencies:{}, br:{}, us:{}, crypto:{} };
 
   const SECTIONS = [
-    { key:"currencies", label:"💵 Moedas",       unit:"BRL", color:"#e2c97e", hint:"USD, EUR, GBP..." },
-    { key:"br",         label:"📈 Ações BR",     unit:"BRL", color:"#7ecfb3", hint:"PETR4, VALE3..." },
+    { key:"currencies", label:"💵 Moedas",       unit:"BRL", color:"#F5C518", hint:"USD, EUR, GBP..." },
+    { key:"br",         label:"📈 Ações BR",     unit:"BRL", color:"#22c55e", hint:"PETR4, VALE3..." },
     { key:"us",         label:"🇺🇸 Ações EUA",   unit:"USD", color:"#60a5fa", hint:"AAPL, MSFT..."   },
     { key:"crypto",     label:"₿ Crypto",        unit:"USD", color:"#f7931a", hint:"BTC, ETH..."     },
   ];
@@ -1955,8 +1903,8 @@ function ScreenCotacoes({ quotes, isMobile, onFetch, onUpdateWatchlist, qLoading
   }
 
   function changePctColor(pct) {
-    if (!pct && pct !== 0) return "#6a6458";
-    return pct >= 0 ? "#7ecfb3" : "#e27e9a";
+    if (!pct && pct !== 0) return "#555";
+    return pct >= 0 ? "#22c55e" : "#ef4444";
   }
 
   function changePctStr(pct) {
@@ -1966,46 +1914,64 @@ function ScreenCotacoes({ quotes, isMobile, onFetch, onUpdateWatchlist, qLoading
 
   return (
     <div style={P.root}>
-      <PageHeader title="Cotações" subtitle="Estimativas via Claude — sincroniza USD/EUR com o portfólio">
-        <Btn onClick={() => onFetch(wl)} disabled={qLoading}>
+      <PageHeader title="Cotações" subtitle="Dados oficiais — BCB (CDI, PTAX) + Brapi (B3, Crypto)">
+        <Btn onClick={() => onFetch()} disabled={qLoading}>
           {qLoading ? "Buscando..." : <span style={{display:"flex",alignItems:"center",gap:7}}><Icon name="refresh" size={14}/> Atualizar</span>}
         </Btn>
       </PageHeader>
 
+      {/* Linha de status */}
       {quotes?.updatedAt && (
-        <div style={{ fontSize:11, color:"#555", fontFamily:"'IBM Plex Mono',monospace", marginBottom:20 }}>
-          Última atualização: {quotes.updatedAt}
+        <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:20, flexWrap:"wrap" }}>
+          <span style={{ fontSize:11, color:"#555", fontFamily:"'IBM Plex Mono',monospace" }}>
+            Última atualização: {quotes.updatedAt}
+          </span>
+          {data.cached && (
+            <span style={{ fontSize:11, background:"#1a1a00", border:"1px solid #F5C51833", color:"#F5C518", fontFamily:"'IBM Plex Mono',monospace", padding:"2px 10px", borderRadius:20 }}>
+              cache ativo
+            </span>
+          )}
+          {data.source && (
+            <span style={{ fontSize:11, color:"#444", fontFamily:"'IBM Plex Mono',monospace" }}>
+              fonte: {data.source}
+            </span>
+          )}
         </div>
       )}
 
+      {/* Card CDI */}
       {quotes?.data?.cdi && (
         <div style={{ background:"#111", border:"1px solid #F5C51844", borderRadius:14, padding:"16px 20px", marginBottom:20, display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
           <div style={{ fontSize:32 }}>📡</div>
           <div style={{ flex:1 }}>
-            <div style={{ fontSize:10, color:"#555", textTransform:"uppercase", letterSpacing:1.5, fontFamily:"'IBM Plex Mono',monospace", marginBottom:4 }}>Taxa CDI — atualizada automaticamente</div>
+            <div style={{ fontSize:10, color:"#555", textTransform:"uppercase", letterSpacing:1.5, fontFamily:"'IBM Plex Mono',monospace", marginBottom:4 }}>
+              Taxa CDI — Banco Central do Brasil
+            </div>
             <div style={{ fontSize:28, fontWeight:800, color:"#F5C518", fontFamily:"'IBM Plex Mono',monospace", letterSpacing:-1 }}>
               {fmtP(quotes.data.cdi)}
               <span style={{ fontSize:13, color:"#555", marginLeft:8, fontWeight:400 }}>ao ano</span>
             </div>
           </div>
-          <div style={{ background:"#001a00", border:"1px solid #00cc6633", borderRadius:8, padding:"6px 14px", fontSize:11, color:"#00cc66", fontFamily:"'IBM Plex Mono',monospace" }}>
+          <div style={{ background:"#001a00", border:"1px solid #22c55e33", borderRadius:8, padding:"6px 14px", fontSize:11, color:"#22c55e", fontFamily:"'IBM Plex Mono',monospace" }}>
             ✓ Sincronizado com o portfólio
           </div>
         </div>
       )}
 
+      {/* Erro */}
       {quotes?.error && (
-        <div style={{ background:"#1a0000", border:"1px solid #cc000044", borderRadius:10, padding:"14px 16px", marginBottom:20, fontSize:11, color:"#ff6666", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.8 }}>
+        <div style={{ background:"#1a0000", border:"1px solid #ef444433", borderRadius:10, padding:"14px 16px", marginBottom:20, fontSize:11, color:"#f87171", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.8 }}>
           <strong>✗ Erro na última busca:</strong><br/>
           {quotes.error}<br/>
-          <span style={{ color:"#555" }}>Tente novamente ou verifique sua conexão com a internet.</span>
+          <span style={{ color:"#555" }}>Tente novamente ou verifique sua conexão.</span>
         </div>
       )}
 
+      {/* Estado inicial */}
       {!quotes?.updatedAt && !quotes?.error && (
-        <div style={{ background:"#111", border:"1px solid #333", borderRadius:10, padding:"14px 18px", marginBottom:20, fontSize:12, color:"#888", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.7 }}>
-          ℹ️ Clique em <strong style={{ color:"#F5C518" }}>↻ Atualizar tudo</strong> para buscar cotações e taxa CDI via Claude.<br/>
-          <span style={{ color:"#555" }}>Necessário configurar a chave de API em Configurações.</span>
+        <div style={{ background:"#111", border:"1px solid #222", borderRadius:10, padding:"14px 18px", marginBottom:20, fontSize:12, color:"#888", fontFamily:"'IBM Plex Mono',monospace", lineHeight:1.7 }}>
+          Clique em <strong style={{ color:"#F5C518" }}>Atualizar</strong> para buscar cotações oficiais do BCB e B3.<br/>
+          <span style={{ color:"#555", fontSize:11 }}>Gratuito · Sem chave de API · Cache de 30 minutos.</span>
         </div>
       )}
 
@@ -3155,8 +3121,4 @@ const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(React.createElement(App));
   </script>
 </body>
-<<<<<<< HEAD
 </html>
-=======
-</html>
->>>>>>> c919c94920df732befe13c5f82956ea1dfe5b319
