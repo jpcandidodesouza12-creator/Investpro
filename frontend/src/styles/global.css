@@ -1,0 +1,72 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600;700;800&display=swap');
+
+:root {
+  --accent:     #F5C518;
+  --bg:         #090909;
+  --surface:    #111111;
+  --border:     #1f1f1f;
+  --text:       #ffffff;
+  --text-sub:   #888888;
+  --text-muted: #444444;
+  --green:      #22c55e;
+  --red:        #ef4444;
+  --radius:     14px;
+  --transition: .18s cubic-bezier(.4,0,.2,1);
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Botões */
+.btn-hover { transition: opacity var(--transition), transform .1s; cursor: pointer; }
+.btn-hover:hover { opacity: .88; transform: translateY(-1px); }
+.btn-hover:active { transform: translateY(0); }
+
+/* Cards */
+.card-hover { transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition); }
+.card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 36px rgba(0,0,0,.55); border-color: #333 !important; }
+
+/* Nav */
+.nav-hover:hover  { background: #1a1a1a !important; color: #ccc !important; }
+.ibtn-hover:hover { background: #1a1a1a !important; color: #fff !important; border-color: #333 !important; }
+.tr-hover:hover   { background: #141414; }
+
+/* Inputs */
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(245,197,24,.08);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #444; }
+
+/* Select options */
+select option { background: #111; color: #fff; }
+
+/* Mobile */
+@media (max-width: 767px) {
+  .kpi-row    { grid-template-columns: 1fr 1fr !important; gap: 10px !important; }
+  .kpi-value  { font-size: 17px !important; }
+  .page-title { font-size: 24px !important; }
+  .card-hover:hover { transform: none; box-shadow: none; }
+}
+
+/* Tablet */
+@media (min-width: 768px) and (max-width: 1024px) {
+  .kpi-row { grid-template-columns: repeat(2, 1fr) !important; }
+}
