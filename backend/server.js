@@ -1,24 +1,16 @@
 require("dotenv").config();
-
-const express   = require("express");
-const helmet    = require("helmet");
-const cors      = require("cors");
-const rateLimit = require("express-rate-limit");
+const express = require("express");
+const cors = require("cors");
 const { setupDatabase, seedAdmin, closePool } = require("./database");
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 3001;
 
-// ─── Middlewares globais ───────────────────────────────────────────────────────
+// ─── Middlewares ─────────────────────────────────────────────────────────────
 
-// Ajuste no Helmet para permitir que o backend converse com o localhost sem bloqueios de segurança rígidos
-app.use(helmet({
-  crossOriginResourcePolicy: false,
-}));
-
-// MARRETA DO CORS: Liberado para aceitar seu computador (localhost) e as nuvens
-app.use(cors({ 
-  origin: true, 
+// LIBERAÇÃO TOTAL DE CORS: Aberto para qualquer origem para teste
+app.use(cors({
+  origin: '*', 
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"]
@@ -26,36 +18,8 @@ app.use(cors({
 
 app.use(express.json({ limit: "2mb" }));
 
-// ─── Rate limiting (Aumentei o limite para evitar que você seja bloqueado nos testes) ───
-const loginLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, // 5 minutos apenas
-  max: 50, // 50 tentativas (mais folga para você)
-  message: { error: "Muitas tentativas. Tente novamente em alguns minutos." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const registerLimiter = rateLimit({
-  windowMs: 5 * 60 * 1000, 
-  max: 20,
-  message: { error: "Muitas solicitações de registro. Aguarde um pouco." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const globalLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 200,
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-app.use(globalLimiter);
-
 // ─── Rotas ────────────────────────────────────────────────────────────────────
-app.use("/auth/login",    loginLimiter);
-app.use("/auth/register", registerLimiter);
-
+// Removido os limiters temporariamente para garantir que você não seja bloqueado
 app.use("/auth",  require("./routes/auth"));
 app.use("/admin", require("./routes/admin"));
 app.use("/data",  require("./routes/data"));
@@ -66,9 +30,10 @@ app.get("/health", (req, res) => {
 
 app.use((req, res) => res.status(404).json({ error: "Rota não encontrada" }));
 
+// Middleware de erro detalhado
 app.use((err, req, res, next) => {
-  console.error("Unhandled error:", err);
-  res.status(500).json({ error: "Erro interno do servidor" });
+  console.error("Erro no Servidor:", err);
+  res.status(500).json({ error: "Erro interno do servidor", details: err.message });
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
@@ -77,7 +42,7 @@ async function start() {
     await setupDatabase();
     await seedAdmin();
     const server = app.listen(PORT, () => {
-      console.log(`✓ InvestPro Backend na porta ${PORT}`);
+      console.log(`✓ Servidor InvestPro rodando na porta ${PORT}`);
     });
 
     const shutdown = async (signal) => {
