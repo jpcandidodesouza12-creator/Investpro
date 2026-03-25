@@ -9,38 +9,43 @@ const { setupDatabase, seedAdmin, closePool } = require("./database");
 const app  = express();
 const PORT = process.env.PORT || 3001;
 
-const ALLOWED_ORIGINS = [
-  process.env.FRONTEND_URL,
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "http://127.0.0.1:5500",
-].filter(Boolean);
-
 // ─── Middlewares globais ───────────────────────────────────────────────────────
-app.use(helmet());
-app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
+
+// Ajuste no Helmet para permitir que o backend converse com o localhost sem bloqueios de segurança rígidos
+app.use(helmet({
+  crossOriginResourcePolicy: false,
+}));
+
+// MARRETA DO CORS: Liberado para aceitar seu computador (localhost) e as nuvens
+app.use(cors({ 
+  origin: true, 
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"]
+}));
+
 app.use(express.json({ limit: "2mb" }));
 
-// ─── Rate limiting ─────────────────────────────────────────────────────────────
+// ─── Rate limiting (Aumentei o limite para evitar que você seja bloqueado nos testes) ───
 const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutos
-  max: 10,
-  message: { error: "Muitas tentativas. Tente novamente em 15 minutos." },
+  windowMs: 5 * 60 * 1000, // 5 minutos apenas
+  max: 50, // 50 tentativas (mais folga para você)
+  message: { error: "Muitas tentativas. Tente novamente em alguns minutos." },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 const registerLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hora
-  max: 5,
-  message: { error: "Muitas solicitações. Tente novamente em 1 hora." },
+  windowMs: 5 * 60 * 1000, 
+  max: 20,
+  message: { error: "Muitas solicitações de registro. Aguarde um pouco." },
   standardHeaders: true,
   legacyHeaders: false,
 });
 
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 120,
+  max: 200,
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -75,7 +80,6 @@ async function start() {
       console.log(`✓ InvestPro Backend na porta ${PORT}`);
     });
 
-    // Graceful shutdown — fecha o pool do PostgreSQL antes de morrer
     const shutdown = async (signal) => {
       console.log(`\n${signal} recebido — encerrando servidor...`);
       server.close(async () => {
