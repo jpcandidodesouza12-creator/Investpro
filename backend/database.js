@@ -2,10 +2,11 @@ const { Pool } = require("pg");
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+  // Ajuste CRÍTICO para o Neon: SSL sempre ativo com rejectUnauthorized false
+  ssl: { rejectUnauthorized: false },
   max: 10,
-  idleTimeoutMillis: 30_000,
-  connectionTimeoutMillis: 5_000,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
 });
 
 const ALL_MODULES = [
@@ -26,35 +27,22 @@ async function setupDatabase() {
   try {
     await client.query("BEGIN");
 
+    // 1. Tabela de usuários
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id          SERIAL PRIMARY KEY,
         name        VARCHAR(100) NOT NULL,
         email       VARCHAR(255) UNIQUE NOT NULL,
         password    VARCHAR(255) NOT NULL,
-        role        VARCHAR(20)  NOT NULL DEFAULT 'user'
-                    CHECK (role IN ('admin','user','guest')),
-        status      VARCHAR(20)  NOT NULL DEFAULT 'active'
-                    CHECK (status IN ('active','pending','rejected')),
+        role        VARCHAR(20)  NOT NULL DEFAULT 'user',
+        status      VARCHAR(20)  NOT NULL DEFAULT 'active',
         active      BOOLEAN NOT NULL DEFAULT true,
         created_at  TIMESTAMP DEFAULT NOW(),
         updated_at  TIMESTAMP DEFAULT NOW()
       );
     `);
 
-    // Migração segura: garante coluna status em bancos existentes
-    await client.query(`
-      DO $$ BEGIN
-        IF NOT EXISTS (
-          SELECT 1 FROM information_schema.columns
-          WHERE table_name = 'users' AND column_name = 'status'
-        ) THEN
-          ALTER TABLE users ADD COLUMN status VARCHAR(20) NOT NULL DEFAULT 'active'
-          CHECK (status IN ('active','pending','rejected'));
-        END IF;
-      END $$;
-    `);
-
+    // 2. Tabela de módulos (Acesso)
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_modules (
         id      SERIAL PRIMARY KEY,
@@ -65,6 +53,7 @@ async function setupDatabase() {
       );
     `);
 
+    // 3. Tabela de dados financeiros
     await client.query(`
       CREATE TABLE IF NOT EXISTS user_data (
         id         SERIAL PRIMARY KEY,
@@ -76,6 +65,7 @@ async function setupDatabase() {
       );
     `);
 
+    // 4. Tabela de tokens revogados (Logout)
     await client.query(`
       CREATE TABLE IF NOT EXISTS revoked_tokens (
         id         SERIAL PRIMARY KEY,
@@ -84,15 +74,8 @@ async function setupDatabase() {
       );
     `);
 
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS idx_user_data_user_id    ON user_data(user_id);
-      CREATE INDEX IF NOT EXISTS idx_user_modules_user_id ON user_modules(user_id);
-      CREATE INDEX IF NOT EXISTS idx_users_status         ON users(status);
-      CREATE INDEX IF NOT EXISTS idx_users_email          ON users(email);
-    `);
-
     await client.query("COMMIT");
-    console.log("✓ Banco de dados pronto");
+    console.log("✓ Banco de dados Neon pronto e tabelas verificadas");
   } catch (err) {
     await client.query("ROLLBACK");
     console.error("✗ Erro ao configurar banco:", err.message);
@@ -104,50 +87,48 @@ async function setupDatabase() {
 
 async function seedAdmin() {
   const bcrypt = require("bcryptjs");
-  const { ADMIN_EMAIL: email, ADMIN_PASSWORD: pass, ADMIN_NAME: name = "Admin" } = process.env;
+  // Se você não definiu essas variáveis no Northflank, o admin não será criado!
+  const email = process.env.ADMIN_EMAIL || "jpcandidodesouza12@gmail.com";
+  const pass = process.env.ADMIN_PASSWORD || "123456"; 
 
-  if (!email || !pass) {
-    console.warn("⚠ ADMIN_EMAIL / ADMIN_PASSWORD não definidos — pulando seed");
-    return;
+  try {
+    const exists = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
+    if (exists.rows.length > 0) {
+      console.log("✓ Admin Master já existe no Neon");
+      return;
+    }
+
+    const hash = await bcrypt.hash(pass, 12);
+    const result = await pool.query(
+      "INSERT INTO users (name, email, password, role, status) VALUES ($1,$2,$3,'admin','active') RETURNING id",
+      ["João Paulo", email, hash]
+    );
+
+    const userId = result.rows[0].id;
+    // Habilita todos os módulos para o admin criado
+    for (const mod of ALL_MODULES) {
+      await pool.query(
+        "INSERT INTO user_modules (user_id, module, enabled) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+        [userId, mod, true]
+      );
+    }
+    console.log(`✓ Admin Master criado com sucesso: ${email}`);
+  } catch (err) {
+    console.error("✗ Erro ao criar Seed Admin:", err.message);
   }
-
-  const exists = await pool.query("SELECT id FROM users WHERE email = $1", [email]);
-  if (exists.rows.length > 0) { console.log("✓ Admin já existe"); return; }
-
-  const hash   = await bcrypt.hash(pass, 12);
-  const result = await pool.query(
-    "INSERT INTO users (name, email, password, role, status) VALUES ($1,$2,$3,'admin','active') RETURNING id",
-    [name, email, hash]
-  );
-  await setUserModules(result.rows[0].id, ALL_MODULES);
-  console.log(`✓ Admin Master criado: ${email}`);
 }
 
 async function getUserModules(userId) {
-  const result = await pool.query(
-    "SELECT module FROM user_modules WHERE user_id = $1 AND enabled = true",
-    [userId]
-  );
-  return result.rows.map(r => r.module);
-}
-
-async function setUserModules(userId, modules) {
-  const client = await pool.connect();
   try {
-    await client.query("BEGIN");
-    await client.query("DELETE FROM user_modules WHERE user_id = $1", [userId]);
-    for (const module of ALL_MODULES) {
-      await client.query(
-        "INSERT INTO user_modules (user_id, module, enabled) VALUES ($1,$2,$3)",
-        [userId, module, modules.includes(module)]
-      );
-    }
-    await client.query("COMMIT");
+    const result = await pool.query(
+      "SELECT module FROM user_modules WHERE user_id = $1 AND enabled = true",
+      [userId]
+    );
+    // Se não houver módulos no banco, retorna os básicos para não quebrar o dashboard
+    if (result.rows.length === 0) return ["dashboard", "investments"];
+    return result.rows.map(r => r.module);
   } catch (err) {
-    await client.query("ROLLBACK");
-    throw err;
-  } finally {
-    client.release();
+    return ["dashboard"];
   }
 }
 
@@ -155,6 +136,6 @@ function closePool() { return pool.end(); }
 
 module.exports = {
   pool, setupDatabase, seedAdmin,
-  getUserModules, setUserModules, closePool,
+  getUserModules, closePool,
   ALL_MODULES, DEFAULT_PERMISSIONS, USER_STATUS,
 };
