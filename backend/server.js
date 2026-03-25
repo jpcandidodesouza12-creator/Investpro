@@ -4,6 +4,7 @@ const cors = require("cors");
 const { setupDatabase, seedAdmin, closePool } = require("./database");
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
 
 // ─── Middlewares ─────────────────────────────────────────────────────────────
