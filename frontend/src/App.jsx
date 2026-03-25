@@ -1,20 +1,40 @@
 import { useState } from "react";
 import { T } from "./styles/theme";
 
-// Layout e Telas (Screens) - Fase 4 e 5
+// Layout e Telas (Screens)
 import AppLayout from "./components/layout/AppLayout";
 import Dashboard from "./screens/Dashboard";
 import Wallet from "./screens/Wallet";
 import Settings from "./screens/Settings";
 
-// Hooks de Negócio - Fase 2
+// Hooks de Negócio
 import { useAuth } from "./hooks/useAuth";
 
 /**
- * Ecrã de Login - Mantém o visual original do InvestPro
- * mas agora totalmente integrado com o Backend via useAuth.
+ * Componente de Input Reutilizável para manter o padrão visual
  */
-function LoginScreen({ onLogin }) {
+const AuthInput = (props) => (
+  <input
+    {...props}
+    style={{ 
+      background: T.bg, 
+      border: `1px solid ${T.border2}`, 
+      borderRadius: 9, 
+      color: T.text, 
+      padding: "11px 14px", 
+      fontFamily: T.mono, 
+      fontSize: 13, 
+      outline: "none",
+      width: "100%",
+      boxSizing: "border-box"
+    }}
+  />
+);
+
+/**
+ * ECRÃ DE LOGIN
+ */
+function LoginScreen({ onLogin, goToRegister }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -45,14 +65,8 @@ function LoginScreen({ onLogin }) {
         </div>
         
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <input
-            style={{ background: T.bg, border: `1px solid ${T.border2}`, borderRadius: 9, color: T.text, padding: "11px 14px", fontFamily: T.mono, fontSize: 13, outline: "none" }}
-            type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} autoFocus
-          />
-          <input
-            style={{ background: T.bg, border: `1px solid ${T.border2}`, borderRadius: 9, color: T.text, padding: "11px 14px", fontFamily: T.mono, fontSize: 13, outline: "none" }}
-            type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)}
-          />
+          <AuthInput type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} autoFocus required />
+          <AuthInput type="password" placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} required />
           
           {error && (
             <div style={{ background: "#1a0000", border: "1px solid #ef444433", borderRadius: 9, padding: "10px 14px", fontSize: 13, color: "#f87171", fontFamily: T.mono }}>
@@ -65,9 +79,70 @@ function LoginScreen({ onLogin }) {
           </button>
         </form>
         
-        <p style={{ textAlign: "center", marginTop: 28, fontSize: 11, color: "#333", fontFamily: T.mono }}>
-          InvestPro v2.0 · Migração Vite Concluída ✅
-        </p>
+        <div style={{ marginTop: 24, textAlign: "center", fontSize: 13, color: T.textMuted }}>
+          Não tem conta?{" "}
+          <span onClick={goToRegister} style={{ color: T.accent, cursor: "pointer", fontWeight: "bold", textDecoration: "underline" }}>
+            Criar acesso gratuito
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * ECRÃ DE REGISTRO (NOVO)
+ */
+function RegisterScreen({ onBack, onLogin }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const { register } = useAuth();
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await register(name, email.trim(), password);
+      alert("Conta criada com sucesso! Faça login agora.");
+      onBack(); // Volta para o login
+    } catch (err) {
+      setError("Erro ao registrar. O usuário pode já existir ou o servidor está offline.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: T.sans }}>
+      <div style={{ width: "100%", maxWidth: 400 }}>
+        <div style={{ textAlign: "center", marginBottom: 36 }}>
+          <h1 style={{ fontSize: 26, fontWeight: 800, color: T.text }}>Nova Conta</h1>
+          <p style={{ color: T.textMuted, marginTop: 6, fontSize: 14 }}>Comece a gerir os seus ativos agora</p>
+        </div>
+        
+        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <AuthInput type="text" placeholder="Nome completo" value={name} onChange={e => setName(e.target.value)} required />
+          <AuthInput type="email" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
+          <AuthInput type="password" placeholder="Senha forte" value={password} onChange={e => setPassword(e.target.value)} required />
+          
+          {error && (
+            <div style={{ background: "#1a0000", border: "1px solid #ef444433", borderRadius: 9, padding: "10px 14px", fontSize: 13, color: "#f87171", fontFamily: T.mono }}>
+              {error}
+            </div>
+          )}
+
+          <button type="submit" disabled={loading} style={{ background: T.accent, color: "#000", border: "none", padding: "13px", borderRadius: 10, fontFamily: T.sans, fontWeight: 700, fontSize: 15, cursor: loading ? "not-allowed" : "pointer" }}>
+            {loading ? "A criar conta..." : "Registrar"}
+          </button>
+          
+          <button type="button" onClick={onBack} style={{ background: "transparent", color: T.textMuted, border: "none", cursor: "pointer", fontSize: 13 }}>
+            ← Voltar para login
+          </button>
+        </form>
       </div>
     </div>
   );
@@ -77,8 +152,8 @@ function LoginScreen({ onLogin }) {
 export default function App() {
   const { authenticated, user, logout, loading: authLoading } = useAuth();
   const [screen, setScreen] = useState('dashboard');
+  const [authView, setAuthView] = useState('login'); // 'login' ou 'register'
 
-  // 1. Estado de carregamento inicial (splash screen)
   if (authLoading) {
     return (
       <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", color: T.accent, fontFamily: T.mono }}>
@@ -87,15 +162,13 @@ export default function App() {
     );
   }
 
-  // 2. Se não estiver autenticado, renderiza o Login
+  // Lógica de Autenticação / Registro
   if (!authenticated) {
-    return <LoginScreen onLogin={() => window.location.reload()} />;
+    return authView === 'login' 
+      ? <LoginScreen onLogin={() => window.location.reload()} goToRegister={() => setAuthView('register')} />
+      : <RegisterScreen onBack={() => setAuthView('login')} onLogin={() => window.location.reload()} />;
   }
 
-  /**
-   * 3. Se logado, renderiza o AppLayout que contém a Sidebar Retrátil.
-   * O conteúdo interno (children) muda de acordo com o estado 'screen'.
-   */
   return (
     <AppLayout 
       activeScreen={screen} 
@@ -103,12 +176,10 @@ export default function App() {
       onLogout={logout}
       userName={user?.name || "Investidor"}
     >
-      {/* Gestão de Telas - Fase 5 */}
       {screen === 'dashboard' && <Dashboard />}
       {screen === 'wallet' && <Wallet />}
       {screen === 'settings' && <Settings />}
       
-      {/* Fallback para ecrãs em desenvolvimento */}
       {screen === 'history' && (
         <div style={{ color: T.text }}>
           <h1 style={{ fontSize: 24, fontWeight: 800 }}>Histórico</h1>
