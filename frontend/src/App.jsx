@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { T } from "./styles/theme";
+import { Analytics } from "@vercel/analytics/react";
 
 // Layout e Telas (Screens) - Fase 4 e 5
 import AppLayout from "./components/layout/AppLayout";
@@ -97,24 +98,27 @@ export default function App() {
    * O conteúdo interno (children) muda de acordo com o estado 'screen'.
    */
   return (
-    <AppLayout 
-      activeScreen={screen} 
-      setScreen={setScreen} 
-      onLogout={logout}
-      userName={user?.name || "Investidor"}
-    >
-      {/* Gestão de Telas - Fase 5 */}
-      {screen === 'dashboard' && <Dashboard />}
-      {screen === 'wallet' && <Wallet />}
-      {screen === 'settings' && <Settings />}
-      
-      {/* Fallback para ecrãs em desenvolvimento */}
-      {screen === 'history' && (
-        <div style={{ color: T.text }}>
-          <h1 style={{ fontSize: 24, fontWeight: 800 }}>Histórico</h1>
-          <p style={{ color: T.textMuted }}>Registo de todas as suas transações passadas.</p>
-        </div>
-      )}
-    </AppLayout>
+    <>
+      <AppLayout 
+        activeScreen={screen} 
+        setScreen={setScreen} 
+        onLogout={logout}
+        userName={user?.name || "Investidor"}
+      >
+        {/* Gestão de Telas - Fase 5 */}
+        {screen === 'dashboard' && <Dashboard />}
+        {screen === 'wallet' && <Wallet />}
+        {screen === 'settings' && <Settings />}
+        
+        {/* Fallback para ecrãs em desenvolvimento */}
+        {screen === 'history' && (
+          <div style={{ color: T.text }}>
+            <h1 style={{ fontSize: 24, fontWeight: 800 }}>Histórico</h1>
+            <p style={{ color: T.textMuted }}>Registo de todas as suas transações passadas.</p>
+          </div>
+        )}
+      </AppLayout>
+      <Analytics />
+    </>
   );
 }
