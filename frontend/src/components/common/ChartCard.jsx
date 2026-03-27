@@ -1,22 +1,30 @@
-import React from 'react';
+import { P } from "../../styles/theme";
 
-const ChartCard = ({ title, children }) => {
+export function ChartCard({ title, children, action }) {
   return (
-    <div className="card" style={{ marginBottom: '20px', display: 'flex', flexDirection: 'column' }}>
-      <h3 style={{ 
-        color: '#F5C518', 
-        fontSize: '16px', 
-        marginBottom: '16px',
-        borderLeft: '3px solid #F5C518',
-        paddingLeft: '10px'
-      }}>
-        {title}
-      </h3>
-      <div style={{ width: '100%', height: '300px' }}>
-        {children}
+    <div style={P.chartCard}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+        <div style={P.chartTitle}>{title}</div>
+        {action && <div>{action}</div>}
       </div>
+      {children}
     </div>
   );
-};
+}
 
-export default ChartCard;
+export function ChartTip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={{ background:"#0e0d0b", border:"1px solid #2a2820", borderRadius:8, padding:"10px 14px", fontFamily:"'IBM Plex Mono',monospace", fontSize:11 }}>
+      <div style={{ color:"#c9bfaa", fontWeight:600, marginBottom:6, borderBottom:"1px solid #1e1c16", paddingBottom:4 }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ display:"flex", justifyContent:"space-between", gap:12, marginBottom:2 }}>
+          <span style={{ color:"#6a6458" }}>{p.name}</span>
+          <span style={{ color: p.stroke || p.fill, fontWeight:600 }}>
+            {"R$ " + Number(p.value || 0).toLocaleString("pt-BR", { minimumFractionDigits:2, maximumFractionDigits:2 })}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}

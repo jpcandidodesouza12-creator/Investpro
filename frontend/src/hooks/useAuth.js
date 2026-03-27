@@ -1,31 +1,38 @@
-import { useState, useEffect } from 'react';
-import { authApi } from '../services/api'; // Corrigido aqui ✅
+import { useState, useCallback } from "react";
+import { authLoad, authSave, authClear, authApi } from "../services/api";
 
 export function useAuth() {
-  const [user, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [auth, setAuth] = useState(() => authLoad());
 
-  useEffect(() => {
-    const token = localStorage.getItem('investpro_token');
-    if (token) {
-      setUser({ token }); 
-    }
-    setLoading(false);
+  const isLoggedIn  = !!auth?.token;
+  const user        = auth?.user        || null;
+  const userRole    = auth?.user?.role  || "guest";
+  const userModules = auth?.modules     || [];
+  const isAdmin     = userRole === "admin";
+  const token       = auth?.token       || null;
+
+  const login = useCallback((data) => {
+    authSave(data);
+    setAuth(data);
   }, []);
 
-  const login = async (email, password) => {
-    // ALTERADO DE 'api.post' PARA 'authApi.post' ABAIXO:
-    const response = await authApi.post('/auth/login', { email, password }); // ✅
-    const { token } = response.data;
-    localStorage.setItem('investpro_token', token);
-    setUser({ token });
-    return response.data;
-  };
+  const logout = useCallback(async () => {
+    try { await authApi.logout(auth?.token); } catch (_) {}
+    authClear();
+    setAuth(null);
+  }, [auth?.token]);
 
-  const logout = () => {
-    localStorage.removeItem('investpro_token');
-    setUser(null);
-  };
+  // Filtra o menu pelo perfil — admin vê tudo, outros só os módulos liberados
+  const filterNav = useCallback((nav) => {
+    if (isAdmin) return nav;
+    return nav.filter(item =>
+      userModules.includes(item.id) || item.id === "dashboard"
+    );
+  }, [isAdmin, userModules]);
 
-  return { user, loading, login, logout, authenticated: !!user };
+  return {
+    auth, token,
+    isLoggedIn, user, userRole, userModules, isAdmin,
+    login, logout, filterNav,
+  };
 }

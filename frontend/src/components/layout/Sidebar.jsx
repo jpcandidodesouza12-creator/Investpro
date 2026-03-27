@@ -1,98 +1,64 @@
-import React, { useState } from 'react';
-import { 
-  LayoutDashboard, 
-  Wallet, 
-  History, 
-  Settings, 
-  ChevronLeft, 
-  ChevronRight, 
-  LogOut 
-} from 'lucide-react';
+import { S, T } from "../../styles/theme";
+import { Icon } from "../common/Icon";
+import { RoleBadge } from "../common/Misc";
 
-const Sidebar = ({ activeScreen, setScreen, onLogout }) => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  const menuItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'wallet', label: 'Minha Carteira', icon: Wallet },
-    { id: 'history', label: 'Histórico', icon: History },
-    { id: 'settings', label: 'Configurações', icon: Settings },
-  ];
-
-  const sidebarStyle = {
-    width: isCollapsed ? '70px' : '240px',
-    height: '100vh',
-    background: '#111',
-    borderRight: '1px solid #2a2a2a',
-    display: 'flex',
-    flexDirection: 'column',
-    transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-    position: 'sticky',
-    top: 0,
-    overflow: 'hidden'
-  };
-
+export function Sidebar({ sideOpen, setSideOpen, screen, setScreen, visibleNav, user, onLogout }) {
   return (
-    <aside style={sidebarStyle}>
-      {/* Header da Sidebar */}
-      <div style={{ padding: '20px', display: 'flex', alignItems: 'center', justifyContent: isCollapsed ? 'center' : 'space-between' }}>
-        {!isCollapsed && <span style={{ color: '#F5C518', fontWeight: 'bold', fontSize: '1.2rem' }}>InvestPro</span>}
-        <button 
-          onClick={() => setIsCollapsed(!isCollapsed)}
-          style={{ background: 'none', border: 'none', color: '#a0a0a0', cursor: 'pointer' }}
-        >
-          {isCollapsed ? <ChevronRight size={20} /> : <ChevronLeft size={20} />}
-        </button>
+    <aside style={{ ...S.sidebar, width: sideOpen ? 240 : 68 }}>
+
+      {/* Logo — clique abre/fecha */}
+      <div style={S.sidebarLogo} onClick={() => setSideOpen(o => !o)}>
+        <div style={{ width:36, height:36, borderRadius:10, background:T.accent, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, fontSize:20, lineHeight:1 }}>
+          🪙
+        </div>
+        {sideOpen && (
+          <>
+            <span style={S.logoText}>InvestPro</span>
+            <span style={{ marginLeft:"auto", color:"#555", flexShrink:0, display:"flex" }}>
+              <Icon name="close" size={14} />
+            </span>
+          </>
+        )}
       </div>
 
-      {/* Menu Itens */}
-      <nav style={{ flex: 1, padding: '10px' }}>
-        {menuItems.map((item) => (
-          <button
-            key={item.id}
+      {/* Info do usuário */}
+      {sideOpen && user && (
+        <div style={{ padding:"12px 14px", borderBottom:`1px solid ${T.border}`, flexShrink:0 }}>
+          <div style={{ fontSize:13, fontWeight:600, color:T.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            {user.name}
+          </div>
+          <div style={{ fontSize:10, color:"#555", fontFamily:T.mono, marginTop:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+            {user.email}
+          </div>
+          <div style={{ marginTop:6 }}>
+            <RoleBadge role={user.role} />
+          </div>
+        </div>
+      )}
+
+      {/* Nav */}
+      <nav style={S.nav}>
+        {(visibleNav || []).map(item => (
+          <button key={item.id}
+            style={{ ...S.navItem, ...(screen === item.id ? S.navActive : {}), justifyContent: sideOpen ? "flex-start" : "center" }}
+            className={screen === item.id ? "" : "nav-hover"}
             onClick={() => setScreen(item.id)}
-            style={{
-              width: '100%',
-              display: 'flex',
-              alignItems: 'center',
-              padding: '12px',
-              marginBottom: '4px',
-              borderRadius: '8px',
-              border: 'none',
-              cursor: 'pointer',
-              background: activeScreen === item.id ? 'rgba(245, 197, 24, 0.1)' : 'transparent',
-              color: activeScreen === item.id ? '#F5C518' : '#a0a0a0',
-              transition: 'all 0.2s'
-            }}
-          >
-            <item.icon size={20} style={{ minWidth: '20px' }} />
-            {!isCollapsed && <span style={{ marginLeft: '12px', fontWeight: '500' }}>{item.label}</span>}
+            title={!sideOpen ? item.label : undefined}>
+            <Icon name={item.icon} size={18} style={{ flexShrink:0 }} />
+            {sideOpen && <span style={{ fontSize:13, marginLeft:2 }}>{item.label}</span>}
           </button>
         ))}
       </nav>
 
       {/* Logout */}
-      <div style={{ padding: '10px', borderTop: '1px solid #2a2a2a' }}>
-        <button
-          onClick={onLogout}
-          style={{
-            width: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            padding: '12px',
-            borderRadius: '8px',
-            border: 'none',
-            background: 'transparent',
-            color: '#ff4444',
-            cursor: 'pointer'
-          }}
-        >
-          <LogOut size={20} />
-          {!isCollapsed && <span style={{ marginLeft: '12px' }}>Sair</span>}
-        </button>
-      </div>
+      <button
+        style={{ ...S.navItem, justifyContent: sideOpen ? "flex-start" : "center", color:"#ef4444", borderTop:`1px solid ${T.border}`, flexShrink:0, padding:"14px 11px" }}
+        className="nav-hover"
+        onClick={onLogout}
+        title={!sideOpen ? "Sair" : undefined}>
+        <Icon name="close" size={18} style={{ flexShrink:0 }} />
+        {sideOpen && <span style={{ fontSize:13, marginLeft:2 }}>Sair</span>}
+      </button>
     </aside>
   );
-};
-
-export default Sidebar;
+}
