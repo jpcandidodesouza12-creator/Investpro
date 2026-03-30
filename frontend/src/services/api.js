@@ -54,8 +54,8 @@ export const dataApi = {
 
 // ─── Cotações — BCB + Brapi, sem chave de API ─────────────────────────────────
 export const quotesApi = {
-  get:        (token)  => apiCall("GET",    "/quotes",       null, token),
-  clearCache: (token)  => apiCall("DELETE", "/quotes/cache", null, token),
+  get:        (token, params) => apiCall("GET", params ? `/quotes?${params}` : "/quotes", null, token),
+  clearCache: (token)         => apiCall("DELETE", "/quotes/cache", null, token),
 };
 
 // ─── Admin ────────────────────────────────────────────────────────────────────

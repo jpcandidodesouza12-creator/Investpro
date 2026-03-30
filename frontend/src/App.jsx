@@ -237,7 +237,14 @@ export default function App() {
   async function fetchQuotes() {
     setQLoading(true);
     try {
-      const data = await quotesApi.get(token);
+      // Passa a watchlist como query params para o backend buscar os tickers certos
+      const wl = store.quotes?.watchlist;
+      const params = wl ? new URLSearchParams({
+        br:     (wl.br     || []).join(","),
+        us:     (wl.us     || []).join(","),
+        crypto: (wl.crypto || []).join(","),
+      }).toString() : "";
+      const data = await quotesApi.get(token, params);
       const now  = new Date().toLocaleString("pt-BR");
       const newQ = { ...store.quotes, data, updatedAt: now, error: null };
       store.setQuotes(newQ);
@@ -299,7 +306,7 @@ export default function App() {
   if (!isLoggedIn) return <LoginScreen onLogin={login} />;
 
   // Props compartilhados entre todas as screens
-  const sp = { isMobile, fx, invs:store.invs, cats:store.cats, settings:store.settings, deps:store.deps, projs, cons, totalInv, irAlerts, vencAlerts, urgent, snaps:store.snaps, quotes:store.quotes };
+  const sp = { isMobile, fx, invs:store.invs, cats:store.cats, settings:store.settings, deps:store.deps, projs, cons, totalInv, irAlerts, vencAlerts, urgent, snaps:store.snaps, quotes:store.quotes, renda:store.renda };
 
   return (
     <div style={S.app}>

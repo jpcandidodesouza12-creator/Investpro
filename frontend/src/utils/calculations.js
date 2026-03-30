@@ -1,75 +1,73 @@
-// --- FUNÇÃO DE DIFERENÇA DE DIAS ---
-const diffDays = (d1, d2) => {
-  const start = new Date(d1 || new Date());
-  const end = new Date(d2 || new Date());
-  return Math.floor((end - start) / (1000 * 60 * 60 * 24));
-};
+import { IR_TABLE, FX_DEFAULT } from "./constants";
+import { diffDays } from "./formatters";
 
-// --- FUNÇÃO DE CÁLCULO PRINCIPAL ---
-export function calcMonths(inv, cdiRate, fx = {}, total = 24) {
-  try {
-    if (!inv) return [];
-
-    const capital = Number(inv.valor) || 0;
-    const cdiAnual = Number(cdiRate) / 100; // 14.51 -> 0.1451
-    const pctLido = Number(inv.pct) || 0; 
-    
-    // Normalização para aceitar "LCI/LCA" conforme seu print
-    const tipo = String(inv.tipo || "").toLowerCase().trim();
-    
-    // Identifica se é Pós-fixado (LCI, LCA, CDB, etc)
-    const ehPos = ["lci", "lca", "lci/lca", "cdb", "tesouro", "lc"].includes(tipo);
-
-    let taxaAnualEfetiva;
-    if (ehPos) {
-      // Cálculo Correto: 98% do CDI (0.98 * 0.1451)
-      taxaAnualEfetiva = (pctLido / 100) * cdiAnual;
-    } else {
-      // Taxa fixa (Onde estava o erro da LCI)
-      taxaAnualEfetiva = pctLido / 100;
-    }
-
-    const taxaMensal = Math.pow(1 + taxaAnualEfetiva, 1 / 12) - 1;
-    const dataInicio = inv.data || new Date().toISOString().split("T")[0];
-
-    return Array.from({ length: total }, (_, i) => {
-      const nMeses = i + 1;
-      const dataAlvo = new Date(dataInicio);
-      dataAlvo.setMonth(dataAlvo.getMonth() + nMeses);
-      
-      const saldoBruto = capital * Math.pow(1 + taxaMensal, nMeses);
-      const rendimento = saldoBruto - capital;
-
-      // Isenção de IR para LCI/LCA
-      const isento = tipo.includes("lci") || tipo.includes("lca");
-      
-      let valorIr = 0;
-      if (!isento && (inv.ir || ["cdb", "tesouro"].includes(tipo))) {
-         // Tabela regressiva simplificada
-         const dias = nMeses * 30;
-         const aliq = dias <= 180 ? 0.225 : dias <= 360 ? 0.20 : dias <= 720 ? 0.175 : 0.15;
-         valorIr = rendimento * aliq;
-      }
-
-      return {
-        mes: dataAlvo.toLocaleDateString("pt-BR", { month: "short", year: "2-digit" }),
-        saldo: Number(saldoBruto.toFixed(2)),
-        rendimento: Number(rendimento.toFixed(2)),
-        ir: Number(valorIr.toFixed(2)),
-        saldoLiquido: Number((saldoBruto - valorIr).toFixed(2)),
-        rendLiquido: Number((rendimento - valorIr).toFixed(2))
-      };
-    });
-  } catch (error) {
-    console.error("Erro no cálculo:", error);
-    return [];
-  }
-}
-
-// --- EXPORTS ADICIONAIS PARA EVITAR QUEBRA DE OUTROS COMPONENTES ---
+// ─── Alíquota IR pelo prazo em dias ───────────────────────────────────────────
 export function getIRAliq(dias) {
-  return dias <= 180 ? 0.225 : dias <= 360 ? 0.20 : dias <= 720 ? 0.175 : 0.15;
+  const row = IR_TABLE.find(r => dias <= r.dias);
+  return (row?.aliq ?? 15) / 100;
 }
 
-export function getIRAlert() { return null; }
-export function getVencAlert() { return null; }
+// ─── Projeta 24 meses para um investimento ────────────────────────────────────
+export function calcMonths(inv, cdiRate, fx = FX_DEFAULT, total = 24) {
+  const fxRate  = inv.intl ? (fx[inv.currency] || 1) : 1;
+  const capital = (inv.valor || 0) * fxRate;
+  const taxaAA  = inv.tipo === "cdb" || inv.tipo === "tesouro"
+    ? ((inv.pct || 100) / 100) * (cdiRate / 100)
+    : (inv.pct || 0) / 100;
+  const taxaMensal = Math.pow(1 + taxaAA, 1 / 12) - 1;
+
+  const inicio = new Date(inv.data || Date.now());
+
+  return Array.from({ length: total }, (_, i) => {
+    const mes        = new Date(inicio);
+    mes.setMonth(mes.getMonth() + i + 1);
+    const dias       = diffDays(inv.data, mes.toISOString().split("T")[0]);
+    const saldo      = capital * Math.pow(1 + taxaMensal, i + 1);
+    const rendimento = saldo - capital;
+    const aliq       = inv.ir ? getIRAliq(dias) : 0;
+    const ir         = rendimento * aliq;
+    const saldoLiq   = saldo - ir;
+    const rendLiq    = rendimento - ir;
+
+    return {
+      mes:          mes.toLocaleDateString("pt-BR", { month: "short", year: "2-digit" }),
+      saldo,
+      rendimento,
+      ir,
+      saldoLiquido: saldoLiq,
+      rendLiquido:  rendLiq,
+    };
+  });
+}
+
+// ─── Verifica alerta de faixa de IR ──────────────────────────────────────────
+export function getIRAlert(inv) {
+  if (!inv.ir || !inv.data) return null;
+  const dias   = diffDays(inv.data);
+  const faixas = [180, 360, 720];
+  for (const limite of faixas) {
+    const restam = limite - dias;
+    if (restam > 0 && restam <= 30) {
+      const aliqAtual = getIRAliq(dias) * 100;
+      const aliqProx  = getIRAliq(limite + 1) * 100;
+      return { inv, dias, restam, aliqAtual, aliqProx };
+    }
+  }
+  return null;
+}
+
+// ─── Verifica alerta de vencimento ───────────────────────────────────────────
+export function getVencAlert(inv) {
+  if (!inv.vencimento) return null;
+  const restam = diffDays(new Date().toISOString().split("T")[0], inv.vencimento) * -1 + diffDays(inv.vencimento);
+
+  // Calcula dias até o vencimento
+  const hoje   = new Date();
+  const venc   = new Date(inv.vencimento);
+  const diasAte = Math.floor((venc - hoje) / 86_400_000);
+
+  if (diasAte >= 0 && diasAte <= 30) {
+    return { inv, diasAte };
+  }
+  return null;
+}
