@@ -41,25 +41,18 @@ router.post("/login",
 
       const user = rows[0];
 
+      // Mesma mensagem para inexistente e senha errada — evita enumeração de e-mails
       if (!user || !(await bcrypt.compare(password, user.password))) {
         return res.status(401).json({ error: "E-mail ou senha incorretos" });
       }
 
-      // ─── AJUSTE ESPECIAL PARA SEU ACESSO (O PULO DO GATO) ──────────────────
-      if (user.email === 'jpcandidodesouza12@gmail.com') {
-        user.status = 'active';
-        user.role = 'admin';
-        user.active = true;
-      } else {
-        // Regras normais para outros usuários
-        if (user.status === USER_STATUS.PENDING) {
-          return res.status(403).json({ error: "Sua solicitação ainda não foi aprovada pelo administrador." });
-        }
-        if (user.status === USER_STATUS.REJECTED || !user.active) {
-          return res.status(403).json({ error: "Acesso negado. Entre em contato com o administrador." });
-        }
+      if (user.status === USER_STATUS.PENDING) {
+        return res.status(403).json({ error: "Sua solicitação ainda não foi aprovada pelo administrador." });
       }
-      // ───────────────────────────────────────────────────────────────────────
+
+      if (user.status === USER_STATUS.REJECTED || !user.active) {
+        return res.status(403).json({ error: "Acesso negado. Entre em contato com o administrador." });
+      }
 
       const modules        = await getUserModules(user.id);
       const { token }      = generateToken(user.id, user.role);
@@ -100,21 +93,12 @@ router.post("/register",
       }
 
       const hash = await bcrypt.hash(password, SALT_ROUNDS);
-      
-      // Se for o seu e-mail, já cria como admin ativo. Se for outro, cai em pending.
-      const role = (email === 'jpcandidodesouza12@gmail.com') ? 'admin' : 'user';
-      const status = (email === 'jpcandidodesouza12@gmail.com') ? 'active' : 'pending';
-
       await pool.query(
-        "INSERT INTO users (name, email, password, role, status) VALUES ($1,$2,$3,$4,$5)",
-        [name, email, hash, role, status]
+        "INSERT INTO users (name, email, password, role, status) VALUES ($1,$2,$3,'user','pending')",
+        [name, email, hash]
       );
 
-      const msg = (status === 'active') 
-        ? "Conta de administrador criada com sucesso!" 
-        : "Solicitação enviada. Aguarde a aprovação do administrador.";
-
-      res.status(201).json({ message: msg });
+      res.status(201).json({ message: "Solicitação enviada. Aguarde a aprovação do administrador." });
     } catch (err) {
       console.error("Register error:", err);
       res.status(500).json({ error: "Erro interno do servidor" });
