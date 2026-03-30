@@ -1,0 +1,10 @@
+export { ScreenDashboard }   from "./Dashboard";
+export { ScreenInvestments } from "./Investments";
+export { ScreenHistory }     from "./History";
+export { ScreenComparator }  from "./Comparator";
+export { ScreenProjection }  from "./Projection";
+export { ScreenCategories }  from "./Categories";
+export { ScreenSettings }    from "./Settings";
+export { ScreenQuotes }      from "./Quotes";
+export { ScreenRenda }       from "./Renda";
+export { ScreenAdmin }       from "./Admin";
